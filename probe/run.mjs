@@ -57,16 +57,22 @@ for (const ms of [0, 250, 500, 1000, 2000]) {
 log("\n## distinct fg colors on line 3 after first sync, by ms:", JSON.stringify(hl));
 log(`(raw ANSI sample, line 3, after 2s): ${JSON.stringify(surface.render(WIDTH)[2]).slice(0, 400)}`);
 
-await type("n"); // select hunk 2 of src/math.ts
+await type("]"); // select hunk 2 of src/math.ts
 await type("c");
 await frame("composing note (after n, c)");
 await type("VERSION bump should be minor?");
 await surface.sendInput("\r");
-await type("\t"); // next file: README.md
+await type("."); // next file: README.md
 await type("c");
 await type("doc ok");
 await surface.sendInput("\r");
 await frame("after two notes, README.md", 80); // also exercises width change 100 -> 80
+
+// mouse: host wheel event reaches the island via the pi-tui adapter path
+const beforeWheel = surface.render(WIDTH).join("\n");
+await surface.sendMouse({ type: "scroll", direction: "down", x: 30, y: 10 });
+await sleep(200);
+log("\n## mouse wheel down changes frame:", surface.render(WIDTH).join("\n") !== beforeWheel);
 
 const submitted = surface.waitForEvent("submit", { timeoutMs: 5000 });
 await surface.sendInput("\x13"); // Ctrl+S

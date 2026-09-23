@@ -333,6 +333,25 @@ come back to the model. `extensions/index.ts` registers a tool alongside the com
   with "Review cancelled.". All pass. Ctrl+S through pi is still unverified end to end
   (it would start an agent turn); the island-side submit path is covered by `probe/run.mjs`.
 
+## i. Mouse and hunk keymap (second live-use round)
+
+- **Mouse:** the overlay now enables SGR mouse mode while open and attaches
+  `attachPiTuiMouseSupport(tui, surface)`; events inside the surface bounds are translated
+  to island coordinates and consumed, and both are torn down on close. Wheel scrolling
+  verified headlessly: `surface.sendMouse({type:"scroll",direction:"down",…})` changes the
+  rendered frame (`probe/run.mjs`). `HunkDiffView` rows carry `onMouseUp`/`onMouseMove`
+  handlers, so clicks inside the diff reach hunkdiff's row actions; what those do inside the
+  island is unverified.
+- **Keymap:** island keys now mirror hunk's review-surface defaults
+  (`docs/keybindings.md`) wherever the island has the concept: `]`/`[` hunk stepping,
+  `.`/`,` file stepping, `b`/`space`/`f` page, `u`/`d` half page, `g`/`G` ends, `q` quit.
+  `c` (compose) and Ctrl+S (submit) remain island additions.
+- **Ceiling, restated:** hunk's sidebar, menus (F10), note E/R/D actions, search, filter,
+  and session store are the CLI app shell, not exported by `hunkdiff/opentui`. The island
+  can never be the full hunk TUI. Full parity in-overlay means embedding the real hunk
+  process (pty + terminal emulation inside the overlay), or hunk upstream exporting an
+  embeddable app shell. The handoff-style TTY swap (pi-hunk) remains the zero-build path.
+
 ## Handoff to implementer
 
 **Create exactly one file: `extensions/index.ts`.** The `package.json` manifest already points

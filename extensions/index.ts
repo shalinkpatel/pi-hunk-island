@@ -13,7 +13,13 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import type { OpenTuiBridgeEvent } from "opentui-island";
-import { createPiTuiSurface, type PiTuiSurface } from "opentui-island/pi-tui";
+import {
+  attachPiTuiMouseSupport,
+  createPiTuiSurface,
+  disablePiTuiMouseMode,
+  enablePiTuiMouseMode,
+  type PiTuiSurface,
+} from "opentui-island/pi-tui";
 
 // Mirrors the island type. Redeclared here so importing the .tsx pulls no React
 // into pi process (DESIGN.md handoff).
@@ -85,6 +91,7 @@ class HunkReviewOverlay implements Component {
   private error: string | null = null;
   private closing = false;
   private lastWidth = 0;
+  private detachMouse: (() => void) | null = null;
 
   constructor(
     private readonly tui: TUI,
@@ -130,6 +137,10 @@ class HunkReviewOverlay implements Component {
       this.lastWidth = this.width;
       this.surface.setScreenBounds({ row: 0, col: 0, width: this.width, height: this.height });
       await this.surface.sync(this.width);
+      // SGR mouse on while the overlay owns the screen; events inside the bounds are
+      // translated to island coordinates and consumed, so pi widgets never see them.
+      enablePiTuiMouseMode(this.tui.terminal);
+      this.detachMouse = attachPiTuiMouseSupport(this.tui, this.surface);
       // Frames are pull-based: async island updates (syntax highlight) stay invisible
       // until the next sync. Poll while open.
       // ponytail: 500ms poll; push-based frames if opentui-island grows them.
@@ -217,6 +228,9 @@ class HunkReviewOverlay implements Component {
     }
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.detachMouse?.();
+    this.detachMouse = null;
+    disablePiTuiMouseMode(this.tui.terminal);
   }
 
   dispose(): void {

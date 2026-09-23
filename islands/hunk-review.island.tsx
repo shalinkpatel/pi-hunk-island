@@ -60,17 +60,29 @@ export default function HunkReviewIsland({ patch = "", title = "diff" }: Props) 
     if (key.ctrl && key.name === "s") return bridge.emit("submit", { notes });
     if (key.name === "escape") return bridge.emit("cancel", { reason: "user" });
     const page = Math.max(1, height - 3);
+    const half = Math.max(1, Math.floor(page / 2));
+    const s = scroll.current;
+    // Keys mirror hunk's review-surface defaults (docs/keybindings.md) wherever the
+    // island has the concept: ]/[ hunks, ./, files, u/d half page, b/space/f page,
+    // g/G ends, q quit. c (compose) and Ctrl+S (submit) are island additions.
     switch (key.name) {
-      case "down": case "j": return scroll.current?.scrollBy(1);
-      case "up": case "k": return scroll.current?.scrollBy(-1);
-      case "pagedown": case "space": return scroll.current?.scrollBy(page);
-      case "pageup": return scroll.current?.scrollBy(-page);
-      // ponytail: n/p only move the highlight; no auto-scroll to the hunk (row offsets are not exported by hunkdiff).
-      case "n": return setHunk((h) => Math.min(h + 1, Math.max(0, hunks.length - 1)));
-      case "p": return setHunk((h) => Math.max(0, h - 1));
-      case "tab": return gotoFile(key.shift ? -1 : 1);
-      case "]": return gotoFile(1);
-      case "[": return gotoFile(-1);
+      case "down": case "j": return s?.scrollBy(1);
+      case "up": case "k": return s?.scrollBy(-1);
+      case "pagedown": case "space": case "f": return s?.scrollBy(page);
+      case "pageup": case "b": return s?.scrollBy(-page);
+      case "u": return s?.scrollBy(-half);
+      case "d": return s?.scrollBy(half);
+      case "g": case "G": {
+        const bottom = key.shift || key.name === "G";
+        if (s) s.scrollTop = bottom ? s.scrollHeight : 0;
+        return;
+      }
+      // ponytail: ]/[ only move the highlight; no auto-scroll to the hunk (hunkdiff does not export row offsets).
+      case "]": return setHunk((h) => Math.min(h + 1, Math.max(0, hunks.length - 1)));
+      case "[": return setHunk((h) => Math.max(0, h - 1));
+      case ".": return gotoFile(1);
+      case ",": return gotoFile(-1);
+      case "q": return bridge.emit("cancel", { reason: "user" });
       case "c": return file && hunks.length > 0 ? setDraft("") : undefined;
     }
   });
@@ -90,7 +102,7 @@ export default function HunkReviewIsland({ patch = "", title = "diff" }: Props) 
 
   const notesHere = notes.filter((n) => n.file === path).length;
   const header = ` ${title}  [${fileIndex + 1}/${files.length}] ${path}  hunk ${hunk + 1}/${hunks.length}  notes ${notes.length} (${notesHere} here)`;
-  const footer = " j/k scroll  n/p hunk  Tab/[ ] file  c comment  Ctrl+S submit  Esc cancel";
+  const footer = " j/k u/d b/space scroll  ]/[ hunk  ./, file  c comment  Ctrl+S submit  q/Esc cancel  mouse: wheel";
 
   return (
     <box flexDirection="column" width="100%" height="100%">
