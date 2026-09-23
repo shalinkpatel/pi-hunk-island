@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+  isKittyProtocolActive,
   matchesKey,
   truncateToWidth,
   visibleWidth,
@@ -83,6 +84,7 @@ class HunkReviewOverlay implements Component {
   private syncTimer: ReturnType<typeof setInterval> | null = null;
   private error: string | null = null;
   private closing = false;
+  private lastWidth = 0;
 
   constructor(
     private readonly tui: TUI,
@@ -107,6 +109,10 @@ class HunkReviewOverlay implements Component {
       this.surface = await createPiTuiSurface({
         height: this.height,
         initialWidth: this.width,
+        // The sidecar re-parses the raw bytes pi forwards. If the host terminal
+        // negotiated the kitty keyboard protocol, keys arrive CSI-u encoded and
+        // the sidecar parser must be told, or every key looks like garbage.
+        kittyKeyboard: isKittyProtocolActive(),
         requestRender: () => this.tui.requestRender(),
         island: {
           module: ISLAND_URL,
@@ -121,6 +127,8 @@ class HunkReviewOverlay implements Component {
         }
       });
       this.surface.focused = true;
+      this.lastWidth = this.width;
+      this.surface.setScreenBounds({ row: 0, col: 0, width: this.width, height: this.height });
       await this.surface.sync(this.width);
       // Frames are pull-based: async island updates (syntax highlight) stay invisible
       // until the next sync. Poll while open.
@@ -173,6 +181,12 @@ class HunkReviewOverlay implements Component {
       return rows;
     }
 
+    this.surface?.setScreenBounds({ row: 0, col: 0, width: w, height: this.height });
+    if (this.surface && w !== this.lastWidth) {
+      // Terminal resized: re-render the island at the new width, not just pad the old frame.
+      this.lastWidth = w;
+      void this.surface.sync(w).catch(this.fail);
+    }
     const body = this.surface.render(w).slice(0, this.height);
     for (let i = 0; i < this.height; i++) {
       const line = body[i];

@@ -1,0 +1,43 @@
+#!/usr/bin/expect -f
+# End-to-end: drive the real pi TUI in a pty (slave forced to raw mode), open the
+# hunk overlay, compose a note through the island keyboard, then cancel.
+set timeout 45
+cd /Users/shalin.patel/dev/repos/pi-hunk-island
+spawn -noecho pi -e ./extensions/index.ts
+set tty $spawn_out(slave,name)
+system "stty raw -echo < $tty"
+sleep 10
+send -- "/hunk-review"
+sleep 1
+send -- " probe/sample.diff"
+sleep 1
+send -- "\r"
+sleep 3
+send -- "\r"
+expect {
+  -re "j/k scroll" {}
+  timeout { puts "\nFAIL_NO_OVERLAY" ; exit 1 }
+}
+send "c"
+expect {
+  -re "note on" {}
+  timeout { puts "\nFAIL_NOT_INTERACTIVE" ; exit 1 }
+}
+send "note from expect\r"
+expect {
+  -re "notes 1" {}
+  timeout { puts "\nFAIL_NO_NOTE" ; exit 1 }
+}
+send "\x11"
+expect {
+  -re "Review cancelled" {}
+  timeout { puts "\nFAIL_NO_CANCEL" ; exit 1 }
+}
+sleep 2
+send "\x04"
+sleep 3
+send "\x04"
+expect {
+  eof { puts "\nE2E_OK" }
+  timeout { puts "\nE2E_OK_NO_CLEAN_EXIT" }
+}

@@ -99,7 +99,10 @@ export default function HunkReviewIsland({ patch = "", title = "diff" }: Props) 
         <HunkDiffView
           diff={file}
           width={Math.max(20, width - 1)}
-          canonicalLayout={width >= 140 ? "split" : "unified"}
+          // unified + wrapLines: split pads short lines into dead space and
+          // unwrapped prose overflows both panels.
+          canonicalLayout="unified"
+          wrapLines={true}
           selectedHunkIndex={hunk}
           scrollable={false}
         />

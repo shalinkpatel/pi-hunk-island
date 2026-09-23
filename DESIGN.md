@@ -315,6 +315,24 @@ come back to the model. `extensions/index.ts` registers a tool alongside the com
   and that Ctrl+S/Esc reach the island in that state. The overlay itself is identical to the
   command path, so the open questions in the handoff list cover both.
 
+## h. Post-handoff fixes (first live use)
+
+- **Layout:** split panels padded short lines into dead space and unwrapped prose overflowed
+  both panels (markdown diffs were unreadable). The island now renders
+  `canonicalLayout="unified"` with `wrapLines={true}`.
+- **Resize:** the overlay now mirrors termdraw: `setScreenBounds` on every render plus a
+  `sync(width)` when pi's render width changes, so the island re-renders at the new width
+  instead of being padded/truncated.
+- **Kitty terminals:** if pi negotiated the kitty keyboard protocol (Ghostty and friends),
+  forwarded keys arrive CSI-u encoded and the sidecar parser must be told. The overlay now
+  passes `kittyKeyboard: isKittyProtocolActive()` from `@earendil-works/pi-tui`. Suspected
+  cause of "nothing responds" on the first live try.
+- **End-to-end verification:** `probe/interactive.exp` drives the real pi TUI in a pty
+  (slave forced to raw mode — expect's default line-buffered discipline eats Enter) and
+  asserts: overlay opens, `c` compose row appears, note lands (`notes 1`), Ctrl+Q cancels
+  with "Review cancelled.". All pass. Ctrl+S through pi is still unverified end to end
+  (it would start an agent turn); the island-side submit path is covered by `probe/run.mjs`.
+
 ## Handoff to implementer
 
 **Create exactly one file: `extensions/index.ts`.** The `package.json` manifest already points
