@@ -299,8 +299,8 @@ probe/                    evidence; not shipped (`files` omits it)
 
 ## Handoff to implementer
 
-**Create exactly one file: `extensions/index.ts`.** Also change `package.json` →
-`"pi": { "extensions": ["./extensions/index.ts"] }`. Do not touch the dependency block.
+**Create exactly one file: `extensions/index.ts`.** The `package.json` manifest already points
+at it (`"pi": { "extensions": ["./extensions/index.ts"] }`). Do not touch the dependency block.
 
 Contents of `extensions/index.ts`:
 - `export default function (pi: ExtensionAPI)` registering `hunk-review` (description "Review a
