@@ -1,10 +1,11 @@
 // Headless v2 probe: real hunk in a script(1) pty, parsed by libghostty-vt, through the same
 // HunkSession the pi overlay uses. Run: node probe/pty-probe.mjs  (evidence: probe/pty-output.txt)
-import { execSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { HunkSession } from "../extensions/hunk-pty.ts";
 
-const REPO = new URL("..", import.meta.url).pathname;
+const REPO = fileURLToPath(new URL("..", import.meta.url));
 const SAMPLE = REPO + "probe/sample.diff";
 const log = [];
 const say = (s) => { log.push(s); console.log(s); };
@@ -13,13 +14,26 @@ const check = (name, ok, extra = "") => { if (!ok) failed++; say(`${ok ? "PASS" 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
+const until = async (pred, ms = 4000) => { const end = Date.now() + ms; while (!pred() && Date.now() < end) await sleep(50); return pred(); };
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+function descendants(pid) {
+  const rows = execFileSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" })
+    .trim().split("\n").map((line) => line.trim().split(/\s+/).map(Number));
+  const pids = new Set([pid]);
+  for (const parent of pids) for (const [child, ppid] of rows) if (ppid === parent) pids.add(child);
+  return [...pids];
+}
+const sessions = [];
+process.on("exit", () => { for (const s of sessions) s.dispose(); });
+
 function open(opts) {
   const s = { raw: "", exitCode: undefined, updates: 0 };
   s.session = new HunkSession({ cwd: REPO, cols: 100, rows: 30, kitty: false, patchFile: SAMPLE, ...opts,
     onUpdate: () => s.updates++, onExit: (code) => { s.exitCode = code; } });
   s.session.child.stdout.on("data", (d) => { s.raw += d.toString("latin1"); }); // probe-only tap on hunk's output
   s.has = (re) => s.session.text().some((l) => re.test(l));
-  s.until = async (pred, ms = 4000) => { const end = Date.now() + ms; while (!pred() && Date.now() < end) await sleep(50); return pred(); };
+  s.until = until;
+  sessions.push(s.session);
   return s;
 }
 
@@ -115,28 +129,37 @@ say("notes after exit: " + JSON.stringify(notes));
 check("notes after exit: both, with file/hunk/lines", notes.length === 2 && notes[0].file === "src/math.ts" && notes[1].hunk === 1 && /^new \d/.test(notes[1].lines));
 const dir = a.session.dir;
 a.session.dispose();
-check("dispose removes the session dir", !existsSync(dir));
+a.session.dispose();
+check("dispose is idempotent and removes the session dir", !existsSync(dir));
+check("disposed session renders safely", a.session.lines().length === 0);
 
 // 8. Host force-kill while alive: no stray hunk/script/cat.
 const b = open({ patchFile: undefined, patchText: readFileSync(SAMPLE, "utf8"), title: "PR #1" });
 await b.until(() => b.has(/Patch review: PR_#1\.diff/));
 check("patchText mode: title from <title>.diff", b.has(/Patch review: PR_#1\.diff/));
-const bdir = b.session.dir;
+const tree = descendants(b.session.child.pid);
+check("dispose probe captured script, bash, cat, hunk", tree.length >= 4, tree.join(","));
 b.session.dispose();
-await sleep(500);
-const stray = execSync("ps -ax -o command").toString().split("\n").filter((l) => l.includes(bdir));
-check("dispose() while alive leaves no processes", stray.length === 0, stray.join(" | "));
+check("dispose() reaps entire process tree (including cat/zombies)", await until(() => tree.every((pid) => !alive(pid))));
 check("dispose() while alive: onExit not delivered", b.exitCode === undefined);
 
 // 9. pi dies without dispose (SIGKILL): the feeding cat sees EOF and kills script -> no orphan hunk.
-const orphanTitle = `orphan-${process.pid}`;
 const orphanCode = `import { HunkSession } from ${JSON.stringify(REPO + "extensions/hunk-pty.ts")};
-new HunkSession({ cwd: "/tmp", cols: 80, rows: 20, kitty: false, patchText: "x", title: ${JSON.stringify(orphanTitle)}, onUpdate() {}, onExit() {} });
-setTimeout(() => process.kill(process.pid, "SIGKILL"), 1200);`;
-try { execSync(`node --input-type=module -e ${JSON.stringify(orphanCode)}`, { stdio: "ignore" }); } catch {} // SIGKILL = nonzero
-await sleep(800);
-const orphans = execSync("ps -ax -o command").toString().split("\n").filter((l) => l.includes(orphanTitle));
-check("host SIGKILLed without dispose: hunk does not linger", orphans.length === 0, orphans.join(" | "));
+const s = new HunkSession({ cwd: ${JSON.stringify(REPO)}, cols: 80, rows: 20, kitty: false, patchFile: ${JSON.stringify(SAMPLE)}, onUpdate() {}, onExit() {} });
+const timer = setInterval(() => {
+  if (s.text().some(l => l.includes("Patch review: sample.diff"))) {
+    console.log(s.dir); clearInterval(timer);
+  }
+}, 50);`;
+const host = spawn(process.execPath, ["--input-type=module", "-e", orphanCode], { stdio: ["ignore", "pipe", "inherit"] });
+let orphanDir = "";
+host.stdout.on("data", (d) => { orphanDir += d; });
+check("SIGKILL probe reached real hunk UI", await until(() => orphanDir.includes("\n")));
+const orphanTree = descendants(host.pid);
+check("SIGKILL probe captured host plus all four children", orphanTree.length >= 5, orphanTree.join(","));
+host.kill("SIGKILL");
+check("host SIGKILLed without dispose: entire tree reaped", await until(() => orphanTree.every((pid) => !alive(pid))));
+if (orphanDir.trim()) rmSync(orphanDir.trim(), { recursive: true, force: true });
 
 say(failed ? `PROBE_FAILED (${failed})` : "PROBE_OK");
 writeFileSync(new URL("./pty-output.txt", import.meta.url), log.join("\n") + "\n");

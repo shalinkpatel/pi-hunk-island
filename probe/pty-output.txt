@@ -42,9 +42,13 @@ PASS hunk enabled SGR mouse (?1006h) in its own pty
 PASS q quits hunk (exit 0)  code 0
 notes after exit: [{"file":"src/math.ts","hunk":0,"lines":"new 1","text":"first note"},{"file":"src/math.ts","hunk":1,"lines":"new 21","text":"second note"}]
 PASS notes after exit: both, with file/hunk/lines
-PASS dispose removes the session dir
+PASS dispose is idempotent and removes the session dir
+PASS disposed session renders safely
 PASS patchText mode: title from <title>.diff
-PASS dispose() while alive leaves no processes
+PASS dispose probe captured script, bash, cat, hunk  78312,78313,78315,78314
+PASS dispose() reaps entire process tree (including cat/zombies)
 PASS dispose() while alive: onExit not delivered
-PASS host SIGKILLed without dispose: hunk does not linger
+PASS SIGKILL probe reached real hunk UI
+PASS SIGKILL probe captured host plus all four children  78324,78325,78326,78328,78327
+PASS host SIGKILLed without dispose: entire tree reaped
 PROBE_OK

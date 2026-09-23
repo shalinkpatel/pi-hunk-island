@@ -124,6 +124,16 @@ send -- $k_ctrl_d
 sleep 2
 send -- $k_ctrl_d
 expect {
-  eof { puts "\nE2E_OK" }
-  timeout { puts "\nE2E_OK_NO_CLEAN_EXIT" }
+  eof {
+    set status [wait]
+    if {[lindex $status 2] != 0 || [lindex $status 3] != 0 || [llength $status] > 4} {
+      puts "\nFAIL_PI_EXIT: $status"; exit 1
+    }
+    puts "\nE2E_OK"
+  }
+  timeout {
+    exec kill -KILL [exp_pid]
+    wait
+    puts "\nFAIL_NO_CLEAN_EXIT"; exit 1
+  }
 }
