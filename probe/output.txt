@@ -6,7 +6,7 @@ opentui-island sidecar: @opentui/core@0.5.12 (node_modules/@opentui/core), @open
 hunkdiff/opentui: @opentui/core@0.5.12 (node_modules/@opentui/core), @opentui/react@0.5.12 (node_modules/@opentui/react), react@19.3.0 (node_modules/react)
 islands/*.island.tsx: @opentui/core@0.5.12 (node_modules/@opentui/core), @opentui/react@0.5.12 (node_modules/@opentui/react), react@19.3.0 (node_modules/react)
 
-## createPiTuiSurface + first sync: 201 ms, ready=true, distinct fg colors on line 3: 8
+## createPiTuiSurface + first sync: 178 ms, ready=true, distinct fg colors on line 3: 4
 
 ## initial frame  (24 lines @ width 100)
 | sample.diff  [1/2] src/math.ts  hunk 1/2  notes 0 (0 here)
@@ -109,7 +109,9 @@ islands/*.island.tsx: @opentui/core@0.5.12 (node_modules/@opentui/core), @opentu
     ]
   }
 }
-## events seen by onEvent: submit
+
+## cancel event: {"type":"cancel","payload":{"reason":"user"}} (22 ms after Esc)
+## events seen by onEvent: submit,cancel
 
 ## destroyed cleanly
 

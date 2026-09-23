@@ -71,6 +71,10 @@ await frame("after two notes, README.md", 80); // also exercises width change 10
 const submitted = surface.waitForEvent("submit", { timeoutMs: 5000 });
 await surface.sendInput("\x13"); // Ctrl+S
 log("\n## submit event:", JSON.stringify(await submitted, null, 2));
+const cancelled = surface.waitForEvent("cancel", { timeoutMs: 5000 });
+const tEsc = Date.now();
+await surface.sendInput("\x1b"); // bare Esc (not composing) -> cancel
+log(`\n## cancel event: ${JSON.stringify(await cancelled)} (${Date.now() - tEsc} ms after Esc)`);
 log("## events seen by onEvent:", events.map((e) => e.type).join(","));
 
 await surface.destroy();
