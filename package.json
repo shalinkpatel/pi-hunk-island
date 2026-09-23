@@ -1,0 +1,63 @@
+{
+  "name": "pi-hunk-island",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Prototype: review a unified diff with hunkdiff/opentui inside a pi overlay via opentui-island.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "opentui",
+    "hunk",
+    "diff",
+    "review"
+  ],
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "extensions",
+    "islands",
+    "README.md",
+    "DESIGN.md"
+  ],
+  "scripts": {
+    "probe": "node probe/run.mjs"
+  },
+  "dependencies": {
+    "@opentui/core": "0.5.12",
+    "@opentui/react": "0.5.12",
+    "@pierre/diffs": "1.3.5",
+    "hunkdiff": "0.22.0",
+    "opentui-island": "0.4.0",
+    "react": "^19.2.4"
+  },
+  "overrides": {
+    "opentui-island": {
+      "@opentui/core": "$@opentui/core",
+      "@opentui/react": "$@opentui/react"
+    }
+  },
+  "devDependencies": {
+    "@mariozechner/pi-tui": "npm:@earendil-works/pi-tui@^0.87.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "bun": ">=1.3.10",
+    "node": ">=18"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}

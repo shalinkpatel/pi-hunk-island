@@ -1,0 +1,34 @@
+diff --git a/src/math.ts b/src/math.ts
+index 1111111..2222222 100644
+--- a/src/math.ts
++++ b/src/math.ts
+@@ -1,7 +1,8 @@
+ export function add(a: number, b: number): number {
+   return a + b;
+ }
+ 
+-export function div(a: number, b: number): number {
+-  return a / b;
++export function div(a: number, b: number): number | null {
++  if (b === 0) return null;
++  return a / b;
+ }
+@@ -20,6 +21,6 @@ export function clamp(x: number, lo: number, hi: number): number {
+   return Math.min(hi, Math.max(lo, x));
+ }
+ 
+-export const VERSION = "1.0.0";
++export const VERSION = "1.1.0";
+ 
+ export default { add, div, clamp };
+diff --git a/README.md b/README.md
+index 3333333..4444444 100644
+--- a/README.md
++++ b/README.md
+@@ -1,4 +1,5 @@
+ # math
+ 
+-Tiny math helpers.
++Tiny math helpers. `div` now returns `null` on divide-by-zero.
++
+ See src/math.ts.
