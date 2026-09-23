@@ -1,0 +1,49 @@
+PASS hunk menu bar in VT grid
+PASS hunk patch title
+PASS @@ hunk header
+PASS lines(): one per row  got 30
+PASS lines(): each exactly 100 cells
+PASS lines(): 24-bit SGR colours
+screen (unanswered/legacy session):
+   0|  File  View  Navigate  Agent  Help            Patch review: sample.diff  2 files  +6  -4
+   1| ──────────────────────────────────────────────────────────────────────────────────────────────────
+   2|
+   3|  src/math.ts                                                                               +4 -3
+   4| ▌@@ -1,7 +1,8 @@
+   5| ▌ 1  1    export function add(a: number, b: number): number {
+   6| ▌ 2  2      return a + b;
+   7| ▌ 3  3    }
+   8| ▌ 4  4
+   9| ▌ 5    -  export function div(a: number, b: number): number {
+  10| ▌ 6    -    return a / b;
+  11| ▌    5 +  export function div(a: number, b: number): number | null {
+PASS hunk queries kitty flags (CSI ? u)
+PASS hunk also sends DA1 sentinel (CSI c)
+PASS unanswered: hunk stays legacy (no CSI > flags u)
+PASS unanswered: modifyOtherKeys on (CSI > 4;1 m)
+PASS answered (CSI ? 0 u): hunk pushes kitty flags  "\u001b[>5u"
+PASS answered: hunk turns modifyOtherKeys off (CSI > 4;0 m)
+PASS kitty session: CSI-u 'c' opens hunk note editor
+PASS kitty session: CSI-u text typed
+PASS kitty session: CSI-u ctrl+s saves the note
+PASS kitty session: note mirrored to file  [{"file":"src/math.ts","hunk":0,"lines":"new 1","text":"hi"}]
+PASS kitty session: CSI-u q quits hunk (exit 0)  code 0
+PASS kitty session: notes still readable after exit
+PASS legacy session: CSI-u 'c' also decoded (parser is protocol-agnostic)
+PASS legacy session: legacy Esc closes the draft
+PASS legacy: note saved
+PASS legacy: second note saved  [{"file":"src/math.ts","hunk":0,"lines":"new 1","text":"first note"},{"file":"src/math.ts","hunk":1,"lines":"new 21","text":"second note"}]
+PASS legacy: D deletes the note from the mirror
+PASS resize accepted
+PASS hunk redrew at 80 cols
+PASS lines(): 20 rows x 80 cells after resize
+PASS SGR mouse wheel bytes scroll the diff
+PASS hunk enabled SGR mouse (?1006h) in its own pty
+PASS q quits hunk (exit 0)  code 0
+notes after exit: [{"file":"src/math.ts","hunk":0,"lines":"new 1","text":"first note"},{"file":"src/math.ts","hunk":1,"lines":"new 21","text":"second note"}]
+PASS notes after exit: both, with file/hunk/lines
+PASS dispose removes the session dir
+PASS patchText mode: title from <title>.diff
+PASS dispose() while alive leaves no processes
+PASS dispose() while alive: onExit not delivered
+PROBE_OK
