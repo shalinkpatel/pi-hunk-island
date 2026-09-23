@@ -39,7 +39,7 @@ export function formatNotes(title: string, notes: ReviewNote[]): string {
     return lines.join("\n");
   }
   for (const note of notes) {
-    lines.push(`- `${note.file}` hunk ${note.hunk + 1} (new lines ${note.lines}): ${note.text}`);
+    lines.push(`- \`${note.file}\` hunk ${note.hunk + 1} (new lines ${note.lines}): ${note.text}`);
   }
   return lines.join("\n");
 }
