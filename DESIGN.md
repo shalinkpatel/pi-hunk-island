@@ -429,12 +429,12 @@ extensions) is simply there.
 | `extensions/hunk-pty.ts` | `HunkSession`: pty spawn, kitty handshake, VT feed, resize, cell → ANSI serializer, notes read, teardown. Only node + libghostty imports, so the probe drives the exact code pi runs. |
 | `extensions/index.ts` | pi wiring: overlay component, command, tool, `computePatch`, `formatNotes`. |
 | `hunk-ext/pi-notes.mjs` | hunk-side extension (loaded with `--extension`) mirroring saved user notes to a JSON file. |
-| `probe/pty-probe.mjs` → `probe/pty-output.txt` | Headless probe, 35 checks (render, handshake bytes, keys, notes, delete, resize, mouse, quit, teardown, orphan). |
+| `probe/pty-probe.mjs` → `probe/pty-output.txt` | Real-hunk checks plus `regressions.mjs` (stream/fault probes) and pi-loaded `wiring.ts` (command/tool/overlay contracts). |
 | `probe/interactive.exp [kitty]` | Real pi TUI in an expect pty, both keyboard modes. |
 
 Checks kept and run for this section (all pass): `node probe/pty-probe.mjs` (PROBE_OK),
 `expect probe/interactive.exp` and `expect probe/interactive.exp kitty` (E2E_OK),
-`pi -ne -e ./extensions/index.ts --list-models` (loads, exit 0, no errors).
+`timeout 90 pi -e ./extensions/index.ts --list-models` (loads, exit 0, no `Error` on either stream).
 
 ### j.1 pty: macOS `script(1)`, not node-pty
 
@@ -444,8 +444,8 @@ Probe evidence:
 - Spawned directly with node pipes, script dies: `script: tcgetattr/ioctl: Operation not supported
   on socket` — libuv stdio pipes are socketpairs, and script only tolerates `ENOTTY`. A real pipe
   works, so bash feeds it: `exec script -q /dev/null /bin/sh -c "$0" sh "$@" < <(cat; kill $$)`.
-  After `exec` the node child **is** script, so its `exit` event is hunk's exit (fired 39 ms
-  after `q`, exit code 0 passed through).
+  After `exec` the node child **is** script. Its `exit` event closes stdin to release cat;
+  `close` delivers the result only after stdout/stderr drain (exit code passed through).
 - **Size:** with a non-tty stdin script opens a 0×0 pty and honours neither the parent nor
   `LINES`/`COLUMNS`; the inner sh runs `stty cols C rows R` before `exec hunk`. First hunk frame
   after ~170 ms.
@@ -480,24 +480,28 @@ libghostty-vt-node: its prebuilt loads with install scripts blocked (npm warns
   `snapshot({includeCells:true})`. Cells are flat, row-major, `{row,col,text,width,foreground,
   background,bold?,italic?,underline?}`, colours `#rrggbb`, default colour = field absent; the
   cell after a width-2 glyph is omitted (probed with `中`).
-- Serializer: per row, emit a full SGR (`ESC[0;1;3;4;7;38;2;r;g;b;48;2;r;g;bm`, only set parts)
-  whenever the style changes, the cell text (`" "` if empty), spaces for column gaps, and
-  `ESC[0m` + padding to exactly `cols`. Probe: 30 lines × 100 cells, 20 × 80 after resize,
+- Serializer: walk each row by cell width, synthesizing blank cells for gaps; emit a full SGR
+  (`ESC[0;1;3;4;7;38;2;r;g;b;48;2;r;g;bm`, only set parts) whenever style changes, then text,
+  with `ESC[0m` at row end. Blank cursor cells are included; wide glyphs advance two columns. Probe: 30 lines × 100 cells, 20 × 80 after resize,
   24-bit colours present. The overlay still runs each line through `truncateToWidth`/pad so a
   width disagreement between Ghostty and pi-tui can never overflow pi's line width.
 - **Cursor:** hunk shows the terminal cursor in its note editor (`?25l…?25h` per frame, cursor
   at the typing position). `HunkSession` tracks the last `?25h`/`?25l` in the stream and draws the
-  cursor cell with SGR 7 (inverse).
+  cursor cell with SGR 7 (inverse), including empty cells and wide-glyph continuation positions.
+  A five-byte tail preserves controls split across output chunks; repeated kitty queries each
+  receive one reply, only in kitty mode.
 - **Delta: no poll timer.** v1 polled because island frames were pull-based. Here every pty data
   event calls `tui.requestRender()`, which pi-tui coalesces (nextTick + render throttle).
 
-### j.3 Notes: a 25-line hunk extension writing a JSON file
+### j.3 Notes: a tiny hunk extension writing a JSON file
 
 **Chosen:** `hunk patch --extension hunk-ext/pi-notes.mjs <file>` with `PI_HUNK_NOTES_FILE` in
 the env. `--extension` paths run without a trust prompt (hunk docs, group 1). On
 `note_created` / `note_edited` (`draft:false`) it stores `{file, hunk, lines, text}` by note id;
-on `note_changed` `kind:"removed"` it deletes; after each change it `writeFileSync`s the array.
-The overlay reads that file when hunk exits.
+on `note_changed` `kind:"removed"` it deletes. Each save writes a sibling temporary file and
+renames it atomically over the mirror. The session initializes the mirror to `[]`; readers
+see complete saves. Malformed JSON or invalid note fields raise an error, not an empty review;
+the overlay still disables mouse, disposes the session, and completes before surfacing it.
 
 Why this is the simplest *reliable* path — probe evidence:
 - `hunk session list --json` works while hunk runs (pid, tty, title), but
@@ -564,16 +568,23 @@ ESC\ ESC_Gi=31337,…ESC\ **ESC[c** …` then alt screen, `ESC[>4;1m` (modifyOth
 ### j.6 Resize
 
 `render(width)` reads `tui.terminal.rows` and calls `session.resize(width, rows)`: VT resize, then
-`stty -f <tty>`. It returns false (retried on the next render) until the pty path file exists.
-Unlike v1, height follows the terminal too.
+synchronous `stty -f <tty>` (one-second timeout). No pending subprocess can apply an older size
+after a newer one or after disposal. Lookup/ioctl failures restore the prior VT size and return
+false, leaving the size retryable rather than caching false success. The path is reread each
+resize. Unlike v1, height follows the terminal too.
+
+ponytail: a synchronous subprocess briefly blocks pi on resize; use native ioctl if profiling
+shows this matters. It narrows, but cannot eliminate, the tty-path reuse race (j.10).
 
 ### j.7 Exit and teardown
 
-- hunk exits (`q`/Ctrl+C) → script exits → `onExit(code)` → overlay reads notes + last screen
+- hunk exits (`q`/Ctrl+C) → script exits → output pipes close → `onExit(code)` → overlay reads notes + last screen
   text → `close()`: mouse off, `session.dispose()`, `done(result)` exactly once.
 - `session.dispose()` is idempotent: kill script if alive (hunk gets SIGHUP), destroy stdin (cat
   exits), dispose the VT, `rm -rf` the session dir (tty file, notes file, tool-path patch file).
-  Probe: no process left after dispose-while-alive, `onExit` not delivered after dispose, dir gone.
+  Probe: capture the actual descendant PIDs (script/bash/cat/hunk), then require all to disappear,
+  including zombies, after disposal and host SIGKILL. `onExit` is not delivered after dispose;
+  repeated disposal and rendering after disposal are safe. Constructor failures free VT/temp files.
 - `dispose()` from pi tears down without `done()`, as before.
 - Tool path writes the computed patch to `<sessiondir>/<title>.diff` (`PR #1` → `PR_#1.diff`), so
   hunk's title reads "Patch review: PR_#1.diff". Command path passes the user's file as-is.
@@ -592,8 +603,9 @@ Unlike v1, height follows the terminal too.
 
 ### j.9 Ceilings and unverified
 
-- UNVERIFIED: the tool path in a live session (overlay while a tool executes); same overlay as
-  the command path, which the e2e covers.
+- UNVERIFIED: the tool path during a live model turn. `probe/wiring.ts` now exercises the actual
+  registered tool, argument vectors, results, and shared overlay with a mocked outer pi context;
+  the command's real pi UI remains covered in both keyboard modes.
 - UNVERIFIED: a manual run in a real kitty-protocol terminal (Ghostty). The e2e simulates one.
 - hunk's own dialogs (e.g. the save-view-preferences prompt on quit after layout changes) appear
   as they would standalone; they are hunk's UI, not handled by the extension.
@@ -601,3 +613,33 @@ Unlike v1, height follows the terminal too.
   like any hunk window).
 - Snapshot + serialize runs per render (3000 cells at 100×30); fine so far, cache on a dirty flag
   if a profiler says otherwise.
+
+### j.10 Correctness review (from 29f7b01)
+
+Fixed and reproduced before editing: fragmented/repeated kitty queries; fragmented cursor
+visibility; absent cursor on blank cells; failed stty cached as success; malformed notes silently
+returned as `[]` (or `null` breaking exit cleanup). Also drain output before delivering exit,
+clean up failed constructors, and atomically replace note mirrors. Probes cover native-binding,
+script and hunk startup failures, final buffered diagnostics, a 1 MiB output burst, wide/combining
+cells, note create/edit/draft/delete-last, mouse symmetry, cancel with saved notes, and dispose
+without completion. Real hunk still decodes CSI-u text and Ctrl+S without the kitty handshake;
+kitty repeat events still act as presses.
+
+The old orphan test used invalid patch text, never proved hunk was alive, and searched command
+strings (missing bare cat and zombies). It now waits for real hunk UI and tracks descendant PIDs.
+The interactive test now fails on timeout/nonzero/signal exit instead of printing
+`E2E_OK_NO_CLEAN_EXIT`. All four required checks passed before and after the retained changes.
+
+Known limits / residual risks (not hidden by the checks):
+- The native snapshot does not expose reverse-video attributes. Direct feed of
+  `ESC[7mX ESC[0mY` yields identical unstyled X/Y cells. Fixing arbitrary SGR 7 rendering needs
+  an upstream binding change; do not add a second terminal parser here. Explicit cursor inversion
+  is handled locally. Other attributes absent from `SnapshotCell` have the same ceiling.
+- A standalone ZWJ emoji probe (`👩‍💻`, default VT modes) yields two width-2 cells. Pi's width
+  calculation can disagree with Ghostty; outer truncation/padding prevents overflow but cannot
+  promise identical interior columns for every grapheme. No custom Unicode-width engine added.
+- Between reading the tty path and stty opening it, hunk could exit and the device could be
+  reused. Synchronous stty removes the async backlog window, not this cross-process TOCTOU.
+  No wrong-device resize reproduced. Fully solving it needs a stronger pty handle/transport.
+- EOF's `kill $$` still has the documented PID-reuse window. Real normal/dispose/SIGKILL process
+  trees are reaped in probes; no evidence justifies replacing the working script transport.

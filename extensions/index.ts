@@ -16,7 +16,8 @@ import { HunkSession, type ReviewNote } from "./hunk-pty.ts";
 type Source = { patchFile: string } | { patchText: string; title: string };
 type OverlayResult =
   | { kind: "exit"; code: number | null; notes: ReviewNote[]; screen: string }
-  | { kind: "cancel" };
+  | { kind: "cancel" }
+  | { kind: "error"; message: string };
 
 // Buttons + drag, SGR encoding. The overlay covers the terminal from (1,1), so the reported
 // coordinates are already hunk's pty coordinates: bytes pass through untouched.
@@ -101,8 +102,14 @@ class HunkReviewOverlay implements Component {
       // hunk output is push-based (pty data events); pi-tui coalesces render requests.
       onUpdate: () => tui.requestRender(),
       onExit: (code) => {
-        const screen = this.session.text().map((l) => l.trim()).filter(Boolean).slice(-3).join(" ");
-        this.close({ kind: "exit", code, notes: this.session.notes(), screen });
+        let result: OverlayResult;
+        try {
+          const screen = this.session.text().map((l) => l.trim()).filter(Boolean).slice(-3).join(" ");
+          result = { kind: "exit", code, notes: this.session.notes(), screen };
+        } catch (error) {
+          result = { kind: "error", message: formatError(error) };
+        }
+        this.close(result);
       },
     });
     tui.terminal.write(MOUSE_ON);
@@ -148,14 +155,16 @@ function unsupported(): string | null {
   return process.platform === "darwin" ? null : "hunk review overlay needs macOS (script(1) pty, DESIGN.md j.1).";
 }
 
-function openReview(ctx: ExtensionContext, source: Source): Promise<OverlayResult> {
-  return ctx.ui.custom<OverlayResult>(
+async function openReview(ctx: ExtensionContext, source: Source) {
+  const result = await ctx.ui.custom<OverlayResult>(
     (tui, _theme, _keybindings, done) => new HunkReviewOverlay(tui, ctx.cwd, source, done),
     {
       overlay: true,
       overlayOptions: { row: 0, col: 0, width: "100%", maxHeight: "100%", margin: 0 },
     },
   );
+  if (result?.kind === "error") throw new Error(result.message);
+  return result;
 }
 
 export default function (pi: ExtensionAPI) {

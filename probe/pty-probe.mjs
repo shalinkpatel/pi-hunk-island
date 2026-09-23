@@ -4,6 +4,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { HunkSession } from "../extensions/hunk-pty.ts";
+import { regressions } from "./regressions.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const SAMPLE = REPO + "probe/sample.diff";
@@ -29,7 +30,10 @@ process.on("exit", () => { for (const s of sessions) s.dispose(); });
 function open(opts) {
   const s = { raw: "", exitCode: undefined, updates: 0 };
   s.session = new HunkSession({ cwd: REPO, cols: 100, rows: 30, kitty: false, patchFile: SAMPLE, ...opts,
-    onUpdate: () => s.updates++, onExit: (code) => { s.exitCode = code; } });
+    onUpdate: () => s.updates++, onExit: (code) => {
+      s.exitCode = code;
+      s.drained = s.session.child.stdout.readableEnded && s.session.child.stderr.readableEnded;
+    } });
   s.session.child.stdout.on("data", (d) => { s.raw += d.toString("latin1"); }); // probe-only tap on hunk's output
   s.has = (re) => s.session.text().some((l) => re.test(l));
   s.until = until;
@@ -68,6 +72,10 @@ k.session.write("\x1b[99u"); // kitty "c" = start note
 check("kitty session: CSI-u 'c' opens hunk note editor", await k.until(() => k.has(/Draft note/)));
 k.session.write("\x1b[104u\x1b[105u"); // "hi"
 check("kitty session: CSI-u text typed", await k.until(() => k.has(/│ hi /)));
+k.session.write("\x1b[106;1:2u"); // flags-7 repeat is a press to hunk
+check("kitty repeat event types a character", await k.until(() => k.has(/│ hij /)));
+k.session.write("\x7f");
+await k.until(() => k.has(/│ hi /));
 k.session.write("\x1b[115;5u"); // kitty ctrl+s = save note
 check("kitty session: CSI-u ctrl+s saves the note", await k.until(() => k.has(/Your note/)));
 const kn = k.session.notes();
@@ -87,9 +95,9 @@ check("legacy session: legacy Esc closes the draft", await a.until(() => !a.has(
 // 4. Legacy keys + notes: two notes, one deleted.
 a.session.write("c");
 await a.until(() => a.has(/Draft note/));
-a.session.write("first note");
-await sleep(150);
-a.session.write("\x13"); // ctrl+s
+a.session.write([..."first note"].map(c => `\x1b[${c.codePointAt(0)}u`).join(""));
+check("legacy: CSI-u text decoded without handshake", await a.until(() => a.has(/first note/)));
+a.session.write("\x1b[115;5u"); // CSI-u Ctrl+S also works without the handshake
 check("legacy: note saved", await a.until(() => a.session.notes().length === 1));
 a.session.write("]");
 await sleep(300);
@@ -127,6 +135,7 @@ check("q quits hunk (exit 0)", await a.until(() => a.exitCode !== undefined) && 
 const notes = a.session.notes();
 say("notes after exit: " + JSON.stringify(notes));
 check("notes after exit: both, with file/hunk/lines", notes.length === 2 && notes[0].file === "src/math.ts" && notes[1].hunk === 1 && /^new \d/.test(notes[1].lines));
+check("exit callback waits for stdout and stderr EOF", a.drained);
 const dir = a.session.dir;
 a.session.dispose();
 a.session.dispose();
@@ -160,6 +169,10 @@ check("SIGKILL probe captured host plus all four children", orphanTree.length >=
 host.kill("SIGKILL");
 check("host SIGKILLed without dispose: entire tree reaped", await until(() => orphanTree.every((pid) => !alive(pid))));
 if (orphanDir.trim()) rmSync(orphanDir.trim(), { recursive: true, force: true });
+
+await regressions({ open, check, until });
+const wiring = execFileSync("pi", ["-ne", "-e", REPO + "probe/wiring.ts", "--list-models"], { encoding: "utf8", timeout: 90000 });
+check("command/tool contracts and overlay cleanup", wiring.includes("WIRING_OK") && !wiring.includes("Error"));
 
 say(failed ? `PROBE_FAILED (${failed})` : "PROBE_OK");
 writeFileSync(new URL("./pty-output.txt", import.meta.url), log.join("\n") + "\n");

@@ -25,8 +25,8 @@ prebuilt, and the pty is the system `script`.
 
 ```bash
 npm install
-node probe/pty-probe.mjs                    # headless: real hunk in the pty, 35 checks
+node probe/pty-probe.mjs                    # real hunk, fault probes, command/tool contracts
 expect probe/interactive.exp                # real pi TUI, legacy keyboard
 expect probe/interactive.exp kitty          # real pi TUI, kitty keyboard protocol
-pi -ne -e ./extensions/index.ts --list-models   # load smoke
+timeout 90 pi -e ./extensions/index.ts --list-models  # load smoke
 ```
