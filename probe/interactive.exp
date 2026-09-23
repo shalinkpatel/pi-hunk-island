@@ -1,42 +1,120 @@
 #!/usr/bin/expect -f
-# End-to-end: drive the real pi TUI in a pty (slave forced to raw mode), open the
-# hunk overlay, compose a note through the island keyboard, then cancel.
-set timeout 45
-cd /Users/shalin.patel/dev/repos/pi-hunk-island
-spawn -noecho pi -e ./extensions/index.ts
+# End-to-end (v2): drive the real pi TUI in a pty (slave forced raw, no kitty protocol, so
+# this is the legacy-key path), open the real hunk TUI in the overlay three times:
+#   1. note typed through hunk's own editor, then host Ctrl+Q cancel
+#   2. hunk's own q with no notes
+#   3. note + hunk q -> notes delivered as a user message
+# A bogus API key makes the resulting agent turn fail fast instead of calling a model.
+#
+# `expect probe/interactive.exp kitty` plays a kitty-protocol terminal instead: it answers
+# pi's CSI ? u query with flags 7, then sends keys the way such a terminal does (plain text,
+# CSI-u for ctrl/esc, plus key-release events pi must drop). That exercises the handshake path.
+set timeout 30
+set kitty [expr {[lindex $argv 0] eq "kitty"}]
+if {$kitty} {
+  set k_c "c\x1b\[99;1:3u"
+  set k_ctrl_s "\x1b\[115;5u\x1b\[115;5:3u"
+  set k_ctrl_q "\x1b\[113;5u"
+  set k_esc "\x1b\[27u"
+  set k_ctrl_d "\x1b\[100;5u"
+} else {
+  set k_c "c"
+  set k_ctrl_s "\x13"
+  set k_ctrl_q "\x11"
+  set k_esc "\x1b"
+  set k_ctrl_d "\x04"
+}
+cd [file dirname [file normalize [info script]]]/..
+spawn -noecho pi -ne -ns -nc --no-session --offline --model google/gemini-2.5-flash --api-key bogus -e ./extensions/index.ts
 set tty $spawn_out(slave,name)
-system "stty raw -echo < $tty"
-sleep 10
-send -- "/hunk-review"
-sleep 1
-send -- " probe/sample.diff"
-sleep 1
-send -- "\r"
-sleep 3
-send -- "\r"
-expect {
-  -re "b/space scroll" {}
-  timeout { puts "\nFAIL_NO_OVERLAY" ; exit 1 }
+system "stty raw -echo rows 30 columns 100 < $tty"
+if {$kitty} {
+  expect {
+    -ex "\x1b\[?u" { send -- "\x1b\[?7u\x1b\[?62;22c" }
+    timeout { puts "\nFAIL_NO_PI_KITTY_QUERY" ; exit 1 }
+  }
 }
-send "c"
-expect {
-  -re "note on" {}
-  timeout { puts "\nFAIL_NOT_INTERACTIVE" ; exit 1 }
+sleep 8
+
+proc open_review {} {
+  send -- "/hunk-review probe/sample.diff"
+  sleep 1
+  # Enter may first be taken by the autocomplete popup; resend until hunk is up.
+  set tries 0
+  send -- "\r"
+  # same screen row, in order: hunk menu bar, then its title
+  expect {
+    -timeout 4 -re "File +View +Navigate" {}
+    timeout {
+      if {[incr tries] > 2} { puts "\nFAIL_NO_HUNK_MENU" ; exit 1 }
+      send -- "\r"
+      exp_continue
+    }
+  }
+  expect {
+    -re "Patch review: sample\\.diff" {}
+    timeout { puts "\nFAIL_NO_HUNK_UI" ; exit 1 }
+  }
+  sleep 1
 }
-send "note from expect\r"
-expect {
-  -re "notes 1" {}
-  timeout { puts "\nFAIL_NO_NOTE" ; exit 1 }
+
+proc add_note {text} {
+  global k_c k_ctrl_s
+  send -- $k_c
+  expect {
+    -re "Draft note" {}
+    timeout { puts "\nFAIL_NO_KEY_RESPONSE" ; exit 1 }
+  }
+  send -- $text
+  expect {
+    -re $text {}
+    timeout { puts "\nFAIL_NO_TYPING" ; exit 1 }
+  }
+  send -- $k_ctrl_s
+  expect {
+    -re "Your note" {}
+    timeout { puts "\nFAIL_NOTE_NOT_SAVED" ; exit 1 }
+  }
+  sleep 0.5
 }
-send "\x11"
+
+# 1. note, then host cancel
+open_review
+add_note "note from expect"
+send -- $k_ctrl_q
 expect {
   -re "Review cancelled" {}
   timeout { puts "\nFAIL_NO_CANCEL" ; exit 1 }
 }
-sleep 2
-send "\x04"
+sleep 1
+
+# 2. hunk's own quit, nothing noted
+open_review
+send "q"
+expect {
+  -re "No review notes" {}
+  timeout { puts "\nFAIL_NO_HUNK_QUIT" ; exit 1 }
+}
+sleep 1
+
+# 3. note + hunk quit -> notes reach the agent as a user message
+open_review
+add_note "ship it"
+send "q"
+expect {
+  -re "Review notes on sample\\.diff \\(1\\)" {}
+  timeout { puts "\nFAIL_NO_NOTES_MESSAGE" ; exit 1 }
+}
+expect {
+  -re "hunk 1 \\(new 1\\): ship it" {}
+  timeout { puts "\nFAIL_NOTE_BODY" ; exit 1 }
+}
 sleep 3
-send "\x04"
+send -- $k_esc
+sleep 1
+send -- $k_ctrl_d
+sleep 2
+send -- $k_ctrl_d
 expect {
   eof { puts "\nE2E_OK" }
   timeout { puts "\nE2E_OK_NO_CLEAN_EXIT" }

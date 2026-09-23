@@ -9,26 +9,19 @@ import {
   truncateToWidth,
   visibleWidth,
   type Component,
-  type Theme,
   type TUI,
 } from "@earendil-works/pi-tui";
-import type { OpenTuiBridgeEvent } from "opentui-island";
-import {
-  attachPiTuiMouseSupport,
-  createPiTuiSurface,
-  disablePiTuiMouseMode,
-  enablePiTuiMouseMode,
-  type PiTuiSurface,
-} from "opentui-island/pi-tui";
+import { HunkSession, type ReviewNote } from "./hunk-pty.ts";
 
-// Mirrors the island type. Redeclared here so importing the .tsx pulls no React
-// into pi process (DESIGN.md handoff).
-type ReviewNote = { file: string; hunk: number; lines: string; text: string };
-type OverlayResult = { kind: "submit"; notes: ReviewNote[] } | { kind: "cancel" };
+type Source = { patchFile: string } | { patchText: string; title: string };
+type OverlayResult =
+  | { kind: "exit"; code: number | null; notes: ReviewNote[]; screen: string }
+  | { kind: "cancel" };
 
-const ISLAND_URL = new URL("../islands/hunk-review.island.tsx", import.meta.url);
-const LOADING_STATUS = "Starting hunk review in a Bun sidecar…";
-const BUN_HINT = "Needs Bun >= 1.3.10 on PATH (or OPENTUI_ISLAND_BUN).";
+// Buttons + drag, SGR encoding. The overlay covers the terminal from (1,1), so the reported
+// coordinates are already hunk's pty coordinates: bytes pass through untouched.
+const MOUSE_ON = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const MOUSE_OFF = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 
 function padLine(text: string, width: number): string {
   const truncated = truncateToWidth(text, width, "", true);
@@ -46,9 +39,15 @@ export function formatNotes(title: string, notes: ReviewNote[]): string {
     return lines.join("\n");
   }
   for (const note of notes) {
-    lines.push(`- \`${note.file}\` hunk ${note.hunk + 1} (new lines ${note.lines}): ${note.text}`);
+    lines.push(`- \`${note.file}\` hunk ${note.hunk + 1} (${note.lines}): ${note.text.replace(/\n/g, "\n  ")}`);
   }
   return lines.join("\n");
+}
+
+/** Non-null when hunk exited abnormally without leaving notes. */
+function exitError(result: OverlayResult & { kind: "exit" }): string | null {
+  if (result.code === 0 || result.notes.length > 0) return null;
+  return `hunk exited with code ${result.code}${result.screen ? `: ${result.screen}` : ""}`;
 }
 
 function runCapture(cmd: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string; failed: boolean }> {
@@ -82,170 +81,76 @@ async function computePatch(
   return [r.stdout, "working tree"];
 }
 
+/** Full-screen overlay showing the real hunk TUI (DESIGN.md j). */
 class HunkReviewOverlay implements Component {
-  private readonly height: number;
-  private readonly width: number;
-  private surface: PiTuiSurface | null = null;
-  private unsubscribe: (() => void) | null = null;
-  private syncTimer: ReturnType<typeof setInterval> | null = null;
-  private error: string | null = null;
-  private closing = false;
-  private lastWidth = 0;
-  private detachMouse: (() => void) | null = null;
+  private readonly session: HunkSession;
+  private closed = false;
 
   constructor(
     private readonly tui: TUI,
-    private readonly theme: Theme,
-    private readonly patch: string,
-    private readonly title: string,
+    cwd: string,
+    source: Source,
     private readonly done: (value: OverlayResult) => void,
   ) {
-    this.width = Math.max(1, this.tui.terminal.columns);
-    // Fixed at construction: PiTuiSurface exposes no height setter (DESIGN.md e.6).
-    this.height = Math.max(1, this.tui.terminal.rows);
-    void this.initialize();
-  }
-
-  private fail = (error: unknown): void => {
-    this.error = formatError(error);
-    this.tui.requestRender();
-  };
-
-  private async initialize(): Promise<void> {
-    try {
-      this.surface = await createPiTuiSurface({
-        height: this.height,
-        initialWidth: this.width,
-        // The sidecar re-parses the raw bytes pi forwards. If the host terminal
-        // negotiated the kitty keyboard protocol, keys arrive CSI-u encoded and
-        // the sidecar parser must be told, or every key looks like garbage.
-        kittyKeyboard: isKittyProtocolActive(),
-        requestRender: () => this.tui.requestRender(),
-        island: {
-          module: ISLAND_URL,
-          props: { patch: this.patch, title: this.title },
-        },
-      });
-      this.unsubscribe = this.surface.onEvent((event: OpenTuiBridgeEvent) => {
-        if (event.type === "submit" && event.payload && typeof event.payload === "object" && "notes" in event.payload) {
-          void this.close({ kind: "submit", notes: (event.payload as { notes: ReviewNote[] }).notes });
-        } else if (event.type === "cancel") {
-          void this.close({ kind: "cancel" });
-        }
-      });
-      this.surface.focused = true;
-      this.lastWidth = this.width;
-      this.surface.setScreenBounds({ row: 0, col: 0, width: this.width, height: this.height });
-      await this.surface.sync(this.width);
-      // SGR mouse on while the overlay owns the screen; events inside the bounds are
-      // translated to island coordinates and consumed, so pi widgets never see them.
-      enablePiTuiMouseMode(this.tui.terminal);
-      this.detachMouse = attachPiTuiMouseSupport(this.tui, this.surface);
-      // Frames are pull-based: async island updates (syntax highlight) stay invisible
-      // until the next sync. Poll while open.
-      // ponytail: 500ms poll; push-based frames if opentui-island grows them.
-      this.syncTimer = setInterval(() => {
-        void this.surface?.sync().catch(this.fail);
-      }, 500);
-    } catch (error) {
-      this.fail(error);
-    }
-    this.tui.requestRender();
+    this.session = new HunkSession({
+      cwd,
+      cols: tui.terminal.columns,
+      rows: tui.terminal.rows,
+      kitty: isKittyProtocolActive(),
+      ...source,
+      // hunk output is push-based (pty data events); pi-tui coalesces render requests.
+      onUpdate: () => tui.requestRender(),
+      onExit: (code) => {
+        const screen = this.session.text().map((l) => l.trim()).filter(Boolean).slice(-3).join(" ");
+        this.close({ kind: "exit", code, notes: this.session.notes(), screen });
+      },
+    });
+    tui.terminal.write(MOUSE_ON);
   }
 
   handleInput(data: string): void {
-    if (matchesKey(data, "ctrl+q") || matchesKey(data, "ctrl+c")) {
-      void this.close({ kind: "cancel" });
+    // Host escape hatch; everything else (including Ctrl+C, hunk's own quit) goes to hunk raw.
+    if (matchesKey(data, "ctrl+q")) {
+      this.close({ kind: "cancel" });
       return;
     }
-    if (this.error && matchesKey(data, "escape")) {
-      void this.close({ kind: "cancel" });
-      return;
-    }
-    // Not handleInput(): that one does void sendInput() and leaks an unhandled
-    // rejection after a sidecar crash, which would take pi down (DESIGN.md e.3).
-    void this.surface?.sendInput(data).catch(this.fail);
-    this.tui.requestRender();
+    this.session.write(data);
   }
 
-  invalidate(): void {
-    this.surface?.invalidate();
-  }
-
-  private blanks(width: number): string {
-    return " ".repeat(Math.max(1, width));
-  }
+  invalidate(): void {}
 
   render(width: number): string[] {
     const w = Math.max(1, width);
-    const rows = Array.from({ length: this.height }, () => this.blanks(w));
-
-    if (this.error) {
-      rows[0] = padLine(this.theme.fg("error", `hunk review failed: ${this.error}`), w);
-      rows[1] = padLine(this.theme.fg("dim", BUN_HINT), w);
-      rows[this.height - 1] = padLine(this.theme.fg("warning", "Esc closes."), w);
-      return rows;
-    }
-
-    if (!this.surface) {
-      rows[0] = padLine(this.theme.fg("accent", LOADING_STATUS), w);
-      return rows;
-    }
-
-    this.surface?.setScreenBounds({ row: 0, col: 0, width: w, height: this.height });
-    if (this.surface && w !== this.lastWidth) {
-      // Terminal resized: re-render the island at the new width, not just pad the old frame.
-      this.lastWidth = w;
-      void this.surface.sync(w).catch(this.fail);
-    }
-    const body = this.surface.render(w).slice(0, this.height);
-    for (let i = 0; i < this.height; i++) {
-      const line = body[i];
-      rows[i] = line === undefined ? this.blanks(w) : padLine(line, w);
-    }
-    return rows;
+    const rows = Math.max(1, this.tui.terminal.rows);
+    this.session.resize(w, rows); // no-op unless pi's size changed
+    const lines = this.session.lines();
+    return Array.from({ length: rows }, (_, i) => padLine(lines[i] ?? "", w));
   }
 
-  private async close(result: OverlayResult): Promise<void> {
-    if (this.closing) {
-      return;
-    }
-    this.closing = true;
-    this.cleanup();
-    try {
-      await this.surface?.destroy();
-    } catch {
-      // Surface already dead; nothing to clean up further.
-    } finally {
-      this.done(result);
-    }
+  private teardown(): boolean {
+    if (this.closed) return false;
+    this.closed = true;
+    this.tui.terminal.write(MOUSE_OFF);
+    this.session.dispose();
+    return true;
   }
 
-  private cleanup(): void {
-    if (this.syncTimer) {
-      clearInterval(this.syncTimer);
-      this.syncTimer = null;
-    }
-    this.unsubscribe?.();
-    this.unsubscribe = null;
-    this.detachMouse?.();
-    this.detachMouse = null;
-    disablePiTuiMouseMode(this.tui.terminal);
+  private close(result: OverlayResult): void {
+    if (this.teardown()) this.done(result);
   }
 
   dispose(): void {
-    if (this.closing) {
-      return;
-    }
-    this.closing = true;
-    this.cleanup();
-    void this.surface?.destroy().catch(() => {});
+    this.teardown();
   }
 }
 
-function openReview(ctx: ExtensionContext, patch: string, title: string): Promise<OverlayResult> {
+function unsupported(): string | null {
+  return process.platform === "darwin" ? null : "hunk review overlay needs macOS (script(1) pty, DESIGN.md j.1).";
+}
+
+function openReview(ctx: ExtensionContext, source: Source): Promise<OverlayResult> {
   return ctx.ui.custom<OverlayResult>(
-    (tui, theme, _keybindings, done) => new HunkReviewOverlay(tui, theme, patch, title, done),
+    (tui, _theme, _keybindings, done) => new HunkReviewOverlay(tui, ctx.cwd, source, done),
     {
       overlay: true,
       overlayOptions: { row: 0, col: 0, width: "100%", maxHeight: "100%", margin: 0 },
@@ -260,6 +165,11 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       if (ctx.mode !== "tui") {
         ctx.ui.notify("hunk-review needs an interactive session.", "error");
+        return;
+      }
+      const blocked = unsupported();
+      if (blocked) {
+        ctx.ui.notify(blocked, "error");
         return;
       }
       const arg = (args ?? "").trim();
@@ -280,9 +190,14 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       const title = path.basename(file);
-      const result = await openReview(ctx, patch, title);
+      const result = await openReview(ctx, { patchFile: file });
       if (!result || result.kind === "cancel") {
         ctx.ui.notify("Review cancelled.", "info");
+        return;
+      }
+      const failed = exitError(result);
+      if (failed) {
+        ctx.ui.notify(failed, "error");
         return;
       }
       if (result.notes.length === 0) {
@@ -302,11 +217,11 @@ export default function (pi: ExtensionAPI) {
     name: "hunk_review",
     label: "Hunk review",
     description:
-      "Open an interactive hunk diff review overlay for the user and wait for their notes. " +
+      "Open the real hunk diff review TUI in an overlay for the user and wait for their notes. " +
       "Use when the user wants to review changes and leave comments. Picks the diff source from args: " +
       "pr (GitHub PR number), base (+optional ref, default HEAD) for git diff base...ref, " +
       "or neither for working-tree changes vs HEAD. Optionally paths filters by pathspec. " +
-      "Returns the user hunk-level notes, or that the user cancelled or found nothing to note. " +
+      "Returns the user's hunk notes (file, hunk, line range, text) when they quit hunk, or that they cancelled. " +
       "Interactive sessions only.",
     parameters: Type.Object({
       pr: Type.Optional(Type.Number({ description: "GitHub PR number to review (gh pr diff <n>)" })),
@@ -322,6 +237,10 @@ export default function (pi: ExtensionAPI) {
           content: [{ type: "text", text: "hunk_review needs an interactive (tui) session." }],
           details: {} as Record<string, never>,
         };
+      }
+      const blocked = unsupported();
+      if (blocked) {
+        return { content: [{ type: "text", text: blocked }], details: {} };
       }
       if (params.pr !== undefined && params.base) {
         return {
@@ -349,12 +268,16 @@ export default function (pi: ExtensionAPI) {
         };
       }
       const title = titleOrError;
-      const result = await openReview(ctx, patch, title);
+      const result = await openReview(ctx, { patchText: patch, title });
       if (!result || result.kind === "cancel") {
         return {
           content: [{ type: "text", text: "User cancelled the review." }],
           details: {},
         };
+      }
+      const failed = exitError(result);
+      if (failed) {
+        return { content: [{ type: "text", text: failed }], details: {} };
       }
       return {
         content: [{ type: "text", text: formatNotes(title, result.notes) }],

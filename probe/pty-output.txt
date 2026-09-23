@@ -46,4 +46,5 @@ PASS dispose removes the session dir
 PASS patchText mode: title from <title>.diff
 PASS dispose() while alive leaves no processes
 PASS dispose() while alive: onExit not delivered
+PASS host SIGKILLed without dispose: hunk does not linger
 PROBE_OK

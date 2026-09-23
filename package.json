@@ -2,11 +2,10 @@
   "name": "pi-hunk-island",
   "version": "0.0.0",
   "private": true,
-  "description": "Prototype: review a unified diff with hunkdiff/opentui inside a pi overlay via opentui-island.",
+  "description": "Prototype: review a diff in the real hunk TUI inside a pi overlay (pty + libghostty-vt).",
   "keywords": [
     "pi-package",
     "pi-extension",
-    "opentui",
     "hunk",
     "diff",
     "review"
@@ -15,29 +14,16 @@
   "license": "MIT",
   "files": [
     "extensions",
-    "islands",
+    "hunk-ext",
     "README.md",
     "DESIGN.md"
   ],
   "scripts": {
-    "probe": "node probe/run.mjs"
+    "probe": "node probe/pty-probe.mjs",
+    "e2e": "expect probe/interactive.exp"
   },
   "dependencies": {
-    "@opentui/core": "0.5.12",
-    "@opentui/react": "0.5.12",
-    "@pierre/diffs": "1.3.5",
-    "hunkdiff": "0.22.0",
-    "opentui-island": "0.4.0",
-    "react": "^19.2.4"
-  },
-  "overrides": {
-    "opentui-island": {
-      "@opentui/core": "$@opentui/core",
-      "@opentui/react": "$@opentui/react"
-    }
-  },
-  "devDependencies": {
-    "@mariozechner/pi-tui": "npm:@earendil-works/pi-tui@^0.87.1"
+    "@coder/libghostty-vt-node": "0.1.0-beta.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -52,9 +38,11 @@
     }
   },
   "engines": {
-    "bun": ">=1.3.10",
-    "node": ">=18"
+    "node": ">=20.19"
   },
+  "os": [
+    "darwin"
+  ],
   "pi": {
     "extensions": [
       "./extensions/index.ts"

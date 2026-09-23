@@ -20,10 +20,12 @@ const KITTY_REPLY = "\x1b[?0u";
 // pty via macOS script(1), no native addon (node-pty rejected, DESIGN.md j.1).
 // script refuses a socket stdin (node's pipes are socketpairs: "tcgetattr/ioctl: Operation not
 // supported on socket"), so bash feeds it through `cat` in a process substitution; the node
-// child *is* script, so its exit event is hunk's exit. The inner sh sizes the pty and records
+// child *is* script, so its exit event is hunk's exit. When our stdin closes (dispose, or pi
+// dying without dispose) cat ends and kills script ($$ = script after exec), so hunk gets
+// SIGHUP instead of lingering: script(1) itself ignores stdin EOF. The inner sh sizes the pty and records
 // its path so resize() can `stty -f` it from outside (SIGWINCH reaches hunk).
 // ponytail: macOS-only; Linux util-linux wants `script -qfec <cmd> /dev/null` + `stty -F`.
-const WRAPPER = 'exec script -q /dev/null /bin/sh -c "$0" sh "$@" < <(exec cat)';
+const WRAPPER = 'exec script -q /dev/null /bin/sh -c "$0" sh "$@" < <(cat; kill $$ 2>/dev/null)';
 const INNER = 'stty cols "$1" rows "$2" && tty > "$3" && shift 3 && exec "$@"';
 
 export type HunkSessionOptions = {

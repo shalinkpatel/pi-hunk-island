@@ -1,5 +1,0 @@
-## resolution in skewed tree
-opentui-island sidecar: @opentui/core@0.1.97 (node_modules/@opentui/core), @opentui/react@0.1.97 (node_modules/@opentui/react), react@19.3.0 (node_modules/react)
-hunkdiff/opentui: @opentui/core@0.5.12 (node_modules/hunkdiff/node_modules/@opentui/core), @opentui/react@0.5.12 (node_modules/hunkdiff/node_modules/@opentui/react), react@19.3.0 (node_modules/react)
-islands/*.island.tsx: @opentui/core@0.1.97 (node_modules/@opentui/core), @opentui/react@0.1.97 (node_modules/@opentui/react), react@19.3.0 (node_modules/react)
-## FAILED: OpenTUI sidecar mount failed: Environment variable "OTUI_TREE_SITTER_WORKER_PATH" is already registered with different configuration. Existing: {"name":"OTUI_TREE_SITTER_WORKER_PATH","description":"Path to the TreeSitter worker","type":"string","default":""}, New: {"name":"OTUI_TREE_SITTER_WORKER_PATH","description":"Path to the TreeSitter worker entry script","type":"string","default":""}

@@ -128,6 +128,16 @@ const stray = execSync("ps -ax -o command").toString().split("\n").filter((l) =>
 check("dispose() while alive leaves no processes", stray.length === 0, stray.join(" | "));
 check("dispose() while alive: onExit not delivered", b.exitCode === undefined);
 
+// 9. pi dies without dispose (SIGKILL): the feeding cat sees EOF and kills script -> no orphan hunk.
+const orphanTitle = `orphan-${process.pid}`;
+const orphanCode = `import { HunkSession } from ${JSON.stringify(REPO + "extensions/hunk-pty.ts")};
+new HunkSession({ cwd: "/tmp", cols: 80, rows: 20, kitty: false, patchText: "x", title: ${JSON.stringify(orphanTitle)}, onUpdate() {}, onExit() {} });
+setTimeout(() => process.kill(process.pid, "SIGKILL"), 1200);`;
+try { execSync(`node --input-type=module -e ${JSON.stringify(orphanCode)}`, { stdio: "ignore" }); } catch {} // SIGKILL = nonzero
+await sleep(800);
+const orphans = execSync("ps -ax -o command").toString().split("\n").filter((l) => l.includes(orphanTitle));
+check("host SIGKILLed without dispose: hunk does not linger", orphans.length === 0, orphans.join(" | "));
+
 say(failed ? `PROBE_FAILED (${failed})` : "PROBE_OK");
 writeFileSync(new URL("./pty-output.txt", import.meta.url), log.join("\n") + "\n");
 process.exit(failed ? 1 : 0);
