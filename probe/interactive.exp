@@ -88,8 +88,16 @@ expect {
 }
 sleep 1
 
-# 2. hunk's own quit, nothing noted
+# 2. resize pi's terminal mid-review (hunk must redraw at 90 cols: its rule is 88 cells, and
+#    followed by a styled cell, unlike the VT's reflowed-and-padded old frame),
+#    then hunk's own quit, nothing noted
 open_review
+system "stty rows 24 columns 90 < $tty"
+expect {
+  -re "m(\u2500|\xe2\x94\x80){88}\x1b\\\[0;" {}
+  timeout { puts "\nFAIL_NO_RESIZE_REDRAW" ; exit 1 }
+}
+sleep 0.5
 send "q"
 expect {
   -re "No review notes" {}
