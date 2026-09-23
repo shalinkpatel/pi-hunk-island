@@ -15,7 +15,7 @@ send -- "\r"
 sleep 3
 send -- "\r"
 expect {
-  -re "j/k scroll" {}
+  -re "b/space scroll" {}
   timeout { puts "\nFAIL_NO_OVERLAY" ; exit 1 }
 }
 send "c"
