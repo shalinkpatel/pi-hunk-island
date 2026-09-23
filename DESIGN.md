@@ -297,6 +297,24 @@ probe/                    evidence; not shipped (`files` omits it)
 
 ---
 
+## g. Agent-driven review (added after the handoff)
+
+The agent in the session picks the review arguments; the user does the reviewing; the notes
+come back to the model. `extensions/index.ts` registers a tool alongside the command:
+
+- `hunk_review` — parameters: `pr` (GitHub PR number, `gh pr diff <n>`), or `base` (+ optional
+  `ref`, default HEAD, `git diff <base>...<ref>`), or neither (working tree vs HEAD). Optional
+  `paths` pathspec (git only). Exactly one of pr/base.
+- Execute guards `ctx.mode === "tui"`, computes the diff with `execFile` in `ctx.cwd`
+  (64 MB maxBuffer), and opens the same overlay. Empty diff returns "No changes to review"
+  without opening anything.
+- Result is the tool result, not a user message: submit → `formatNotes` output; cancel →
+  "User cancelled the review."; zero notes → formatNotes with count 0. The turn continues with
+  the notes in context.
+- UNVERIFIED (needs a real terminal): that pi renders the overlay while a tool is executing,
+  and that Ctrl+S/Esc reach the island in that state. The overlay itself is identical to the
+  command path, so the open questions in the handoff list cover both.
+
 ## Handoff to implementer
 
 **Create exactly one file: `extensions/index.ts`.** The `package.json` manifest already points
