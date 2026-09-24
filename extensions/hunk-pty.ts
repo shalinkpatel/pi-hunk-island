@@ -8,6 +8,34 @@ import { createTerminal, type GhosttyVtTerminal, type SnapshotCell } from "@code
 /** One saved user note, as written by hunk-ext/pi-notes.mjs. */
 export type ReviewNote = { file: string; hunk: number; lines: string; text: string };
 
+/** One agent note to seed the review with, mapped into the hunk agent-context sidecar. */
+export type AgentNote = {
+  file: string;
+  /** Line in the diff file, on side (default "new"). */
+  line: number;
+  side?: "new" | "old";
+  summary: string;
+  rationale?: string;
+  /** STML; any markup opt-in flips on --experimental. */
+  markup?: string;
+};
+
+// Sidecar schema per hunk examples/3-agent-review-demo/agent-context.json (DESIGN.md j.11).
+function agentContext(notes: AgentNote[]): string {
+  const files = new Map<string, object[]>();
+  for (const n of notes) {
+    const range = n.side === "old" ? { oldRange: [n.line, n.line] } : { newRange: [n.line, n.line] };
+    const annotations = files.get(n.file) ?? [];
+    annotations.push({ ...range, author: "agent", summary: n.summary, ...pick({ rationale: n.rationale, markup: n.markup }) });
+    files.set(n.file, annotations);
+  }
+  return JSON.stringify({ version: 1, files: [...files].map(([path, annotations]) => ({ path, annotations })) });
+}
+
+function pick(fields: Record<string, string | undefined>): Record<string, string> {
+  return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined));
+}
+
 const NOTES_EXTENSION = fileURLToPath(new URL("../hunk-ext/pi-notes.mjs", import.meta.url));
 
 // script requires a real pipe, not node's socketpair. EOF must kill script (which ignores it)
@@ -26,6 +54,8 @@ export type HunkSessionOptions = {
   patchFile?: string;
   patchText?: string;
   title?: string;
+  /** Notes shown beside the diff on open, as agent annotations. */
+  agentNotes?: AgentNote[];
   onUpdate: () => void;
   onExit: (code: number | null) => void;
 };
@@ -63,6 +93,13 @@ export class HunkSession {
     this.notesFile = join(this.dir, "notes.json");
     try {
       writeFileSync(this.notesFile, "[]");
+      const extraArgs: string[] = [];
+      if (opts.agentNotes?.length) {
+        const contextFile = join(this.dir, "agent-context.json");
+        writeFileSync(contextFile, agentContext(opts.agentNotes));
+        extraArgs.push("--agent-context", contextFile, "--agent-notes");
+        if (opts.agentNotes.some((n) => n.markup)) extraArgs.push("--experimental");
+      }
       let patchFile = opts.patchFile;
       if (patchFile === undefined) {
         patchFile = join(this.dir, `${(opts.title ?? "review").replace(/[^\w.#-]+/g, "_")}.diff`);
@@ -70,7 +107,7 @@ export class HunkSession {
       }
       this.term = createTerminal({ cols: this.cols, rows: this.rows, scrollbackLimit: 0 });
       this.child = spawn("/bin/bash", ["-c", WRAPPER, INNER, String(this.cols), String(this.rows),
-        join(this.dir, "tty"), "hunk", "patch", "--extension", NOTES_EXTENSION, patchFile], {
+        join(this.dir, "tty"), "hunk", "patch", "--extension", NOTES_EXTENSION, ...extraArgs, patchFile], {
         cwd: opts.cwd,
         env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", PI_HUNK_NOTES_FILE: this.notesFile },
         stdio: ["pipe", "pipe", "pipe"],

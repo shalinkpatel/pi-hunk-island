@@ -244,3 +244,18 @@ Known limits / residual risks (not hidden by the checks):
   No wrong-device resize reproduced. Fully solving it needs a stronger pty handle/transport.
 - EOF's `kill $$` still has the documented PID-reuse window. Real normal/dispose/SIGKILL process
   trees are reaped in probes; no evidence justifies replacing the working script transport.
+
+## j.11 agent notes in (sidecar seeding)
+
+Tool `hunk_review` takes optional `notes: [{file, line, side?, summary, rationale?, markup?}]`.
+HunkSession maps them to hunk's `--agent-context` sidecar, schema per hunk
+examples/3-agent-review-demo/agent-context.json: version 1, files[].path,
+annotations[].newRange or oldRange as [line, line], summary (required), rationale?, markup?,
+author "agent". Both new-side and old-side annotations render (probe asserts each).
+`--agent-notes` rides along so they are visible on open; `--experimental` is added only when
+a note carries markup, since plain summary/rationale render without it.
+
+Patch mode stays: live comment add through the daemon remains unavailable (j.3), so seeding at
+launch is the supported direction. Replies to agent notes are user notes anchored to the same
+line and come back like any other user note. The tool description documents the return shape
+{file, hunk (1-based), lines (new-side range), text} and the reply behavior.

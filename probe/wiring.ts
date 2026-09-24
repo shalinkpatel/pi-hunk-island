@@ -14,7 +14,7 @@ export default async function () {
     registerTool(spec) { assert.equal(spec.name, "hunk_review"); tool = spec; },
     sendUserMessage(...args) { sent = args; },
   } as any);
-  assert.deepEqual(Object.keys(tool.parameters.properties), ["pr", "base", "ref", "paths"]);
+  assert.deepEqual(Object.keys(tool.parameters.properties), ["pr", "base", "ref", "paths", "notes"]);
   const cwd = fileURLToPath(new URL("..", import.meta.url));
   const note = { file: "x", hunk: 0, lines: "new 1", text: "first\nsecond" };
   let result: any = { kind: "exit", code: 0, screen: "", notes: [note] };

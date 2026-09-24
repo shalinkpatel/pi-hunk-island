@@ -11,9 +11,9 @@ import {
   type Component,
   type TUI,
 } from "@earendil-works/pi-tui";
-import { HunkSession, type ReviewNote } from "./hunk-pty.ts";
+import { HunkSession, type AgentNote, type ReviewNote } from "./hunk-pty.ts";
 
-type Source = { patchFile: string } | { patchText: string; title: string };
+type Source = ({ patchFile: string } | { patchText: string; title: string }) & { agentNotes?: AgentNote[] };
 type OverlayResult =
   | { kind: "exit"; code: number | null; notes: ReviewNote[]; screen: string }
   | { kind: "cancel" }
@@ -222,7 +222,10 @@ export default function (pi: ExtensionAPI) {
       "Use when the user wants to review changes and leave comments. Picks the diff source from args: " +
       "pr (GitHub PR number), base (+optional ref, default HEAD) for git diff base...ref, " +
       "or neither for working-tree changes vs HEAD. Optionally paths filters by pathspec. " +
-      "Returns the user's hunk notes (file, hunk, line range, text) when they quit hunk, or that they cancelled. " +
+      "Optional notes seed the review: they render beside the diff lines as agent annotations the user " +
+      "sees on open and can reply to; replies and any other notes the user writes come back to you. " +
+      "Returns those user notes when they quit hunk, as {file, hunk, lines, text}: hunk is the 1-based " +
+      "hunk index in that file, lines is the hunk's new-side line range (empty for whole-file deletions). " +
       "Interactive sessions only.",
     parameters: Type.Object({
       pr: Type.Optional(Type.Number({ description: "GitHub PR number to review (gh pr diff <n>)" })),
@@ -231,6 +234,25 @@ export default function (pi: ExtensionAPI) {
       ),
       ref: Type.Optional(Type.String({ description: "Head ref, default HEAD. Requires base" })),
       paths: Type.Optional(Type.String({ description: "Optional pathspec filter (git diff only)" })),
+      notes: Type.Optional(
+        Type.Array(
+          Type.Object({
+            file: Type.String({ description: "File path exactly as it appears in the diff" }),
+            line: Type.Integer({ description: "Line number on the chosen side of the diff" }),
+            side: Type.Optional(
+              Type.Union([Type.Literal("new"), Type.Literal("old")], {
+                description: "Which side of the diff the line is on; default new",
+              }),
+            ),
+            summary: Type.String({ description: "Plain-text note body (always rendered)" }),
+            rationale: Type.Optional(Type.String({ description: "Optional longer reasoning" })),
+            markup: Type.Optional(
+              Type.String({ description: "Optional STML markup; any markup present enables hunk --experimental" }),
+            ),
+          }),
+          { description: "Agent notes to show beside the diff on open" },
+        ),
+      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const reply = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
@@ -242,7 +264,7 @@ export default function (pi: ExtensionAPI) {
       const [patch, title] = await computePatch(ctx.cwd, params);
       if (patch === null) return reply(title);
       if (!patch.trim()) return reply(`No changes to review (${title}).`);
-      const result = await openReview(ctx, { patchText: patch, title });
+      const result = await openReview(ctx, { patchText: patch, title, agentNotes: params.notes });
       if (!result || result.kind === "cancel") return reply("User cancelled the review.");
       return reply(exitError(result) ?? formatNotes(title, result.notes));
     },

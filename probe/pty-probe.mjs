@@ -138,7 +138,7 @@ const notes = a.session.notes();
 say("notes after exit: " + JSON.stringify(notes));
 check("notes after exit: both, with file/hunk/lines", notes.length === 2 && notes[0].file === "src/math.ts" && notes[1].hunk === 1 && /^new \d/.test(notes[1].lines));
 check("exit callback waits for stdout and stderr EOF", a.drained);
-check("normal q reaps script/bash/cat/hunk", await until(() => normalTree.every(pid => !alive(pid))));
+check("normal q reaps script/bash/cat/hunk", await until(() => normalTree.every(pid => !alive(pid)), 10000)); // 4s flaked under probe load
 const dir = a.session.dir;
 a.session.dispose();
 a.session.dispose();
@@ -172,6 +172,18 @@ check("SIGKILL probe captured host plus all four children", orphanTree.length >=
 host.kill("SIGKILL");
 check("host SIGKILLed without dispose: entire tree reaped", await until(() => orphanTree.every((pid) => !alive(pid))));
 if (orphanDir.trim()) rmSync(orphanDir.trim(), { recursive: true, force: true });
+
+// Agent-context sidecar: seeded notes render beside the diff as agent annotations.
+const n = open({
+  agentNotes: [
+    { file: "src/math.ts", line: 6, summary: "AGENTNEW qz1 divide-by-zero guard" },
+    { file: "src/math.ts", line: 5, side: "old", summary: "AGENTOLD qz2 old div signature" },
+  ],
+});
+await n.until(() => n.has(/AGENTNEW qz1/));
+check("agent note visible on open (new side)", n.has(/AGENTNEW qz1/));
+check("agent note visible on open (old side)", n.has(/AGENTOLD qz2/));
+n.session.dispose();
 
 await regressions({ open, check, until });
 const wiring = execFileSync("pi", ["-ne", "-e", REPO + "probe/wiring.ts", "--list-models"], { encoding: "utf8", timeout: 90000 });

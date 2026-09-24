@@ -12,7 +12,9 @@ removed v1 island design).
 
 - `/hunk-review <diff-file>` — review a patch file; notes arrive as a user message.
 - `hunk_review` tool — the agent picks `pr` (GitHub PR), `base` (+`ref`, default HEAD), or
-  neither (working tree), optional `paths`; notes come back as the tool result.
+  neither (working tree), optional `paths`; optional `notes` seed the review as agent
+  annotations beside the diff lines (new or old side; any markup opts into `--experimental`);
+  the user's notes come back as the tool result.
 
 Inside the overlay everything is hunk (`c` note, Ctrl+S save, `E`/`R`/`D`, `?` help, F10 menus,
 your `[keybindings]`). `q` (or Ctrl+C) quits hunk and returns the saved notes. **Ctrl+Q** is the
