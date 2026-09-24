@@ -54,6 +54,12 @@ export type HunkSessionOptions = {
   patchFile?: string;
   patchText?: string;
   title?: string;
+  /** hunk subcommand. Default "patch" reviews patchFile/patchText; "diff" and "show" review the repository in cwd, so the daemon session has a repo and live session commands work. */
+  subcommand?: "patch" | "diff" | "show";
+  /** Positional targets for non-patch subcommands (e.g. ["main", "HEAD"] for diff, ["HEAD"] for show). */
+  targets?: string[];
+  /** Optional pathspec for non-patch subcommands. */
+  paths?: string;
   /** Notes shown beside the diff on open, as agent annotations. */
   agentNotes?: AgentNote[];
   onUpdate: () => void;
@@ -100,14 +106,19 @@ export class HunkSession {
         extraArgs.push("--agent-context", contextFile, "--agent-notes");
         if (opts.agentNotes.some((n) => n.markup)) extraArgs.push("--experimental");
       }
+      const sub = opts.subcommand ?? "patch";
+      if (sub === "diff") extraArgs.push("--exclude-untracked");
       let patchFile = opts.patchFile;
-      if (patchFile === undefined) {
+      if (sub === "patch" && patchFile === undefined) {
         patchFile = join(this.dir, `${(opts.title ?? "review").replace(/[^\w.#-]+/g, "_")}.diff`);
         writeFileSync(patchFile, opts.patchText ?? "");
       }
+      const targets = sub === "patch"
+        ? [patchFile!]
+        : [...(opts.targets ?? []), ...(opts.paths ? ["--", opts.paths] : [])];
       this.term = createTerminal({ cols: this.cols, rows: this.rows, scrollbackLimit: 0 });
       this.child = spawn("/bin/bash", ["-c", WRAPPER, INNER, String(this.cols), String(this.rows),
-        join(this.dir, "tty"), "hunk", "patch", "--extension", NOTES_EXTENSION, ...extraArgs, patchFile], {
+        join(this.dir, "tty"), "hunk", sub, "--extension", NOTES_EXTENSION, ...extraArgs, ...targets], {
         cwd: opts.cwd,
         env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", PI_HUNK_NOTES_FILE: this.notesFile },
         stdio: ["pipe", "pipe", "pipe"],
@@ -137,14 +148,26 @@ export class HunkSession {
       this.term.feed(data);
       opts.onUpdate();
     });
-    this.child.on("exit", () => {
+    let reported = false;
+    const report = (code: number | null): void => {
+      if (reported || !this.term) return;
+      reported = true;
+      opts.onExit(code);
+    };
+    this.child.on("exit", (code) => {
       this.exited = true;
       this.child.stdin?.destroy(); // let cat exit, closing its inherited output pipes
+      // Feed bytes already buffered (read emits data), but never wait for inherited pipes.
+      for (const stream of [this.child.stdout, this.child.stderr]) {
+        while (stream && stream.read() !== null) { /* data handlers update the VT */ }
+      }
+      report(code); // overlay snapshots the VT and notes before disposing
+
     });
     this.child.on("error", (error) => this.term?.feed(`\r\n${error.message}\r\n`));
     this.child.on("close", (code) => {
       this.exited = true;
-      if (this.term) opts.onExit(code); // stdout/stderr drained; never snapshot a disposed VT
+      report(code);
     });
   }
 
@@ -201,6 +224,8 @@ export class HunkSession {
   /** Saved notes; corrupt data must not masquerade as an empty review. */
   notes(): ReviewNote[] {
     const notes = JSON.parse(readFileSync(this.notesFile, "utf8"));
+    if (notes?.error) throw new Error(`Review note export failed: ${notes.error}` +
+      (notes.notes?.length ? `\nRetained notes: ${JSON.stringify(notes.notes)}` : ""));
     if (!Array.isArray(notes) || !notes.every((n) => n && typeof n.file === "string" &&
       Number.isInteger(n.hunk) && n.hunk >= 0 && typeof n.lines === "string" && typeof n.text === "string")) {
       throw new Error(`Invalid review notes in ${this.notesFile}`);

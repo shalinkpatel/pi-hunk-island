@@ -90,6 +90,16 @@ export async function regressions({ open, check, until }) {
   check("draft edits never replace saved notes", s.session.notes()[0].text === "saved");
   handlers.note_edited({ note: { ...note, body: "edited" } });
   check("saved edits replace notes and retain old-side ranges", s.session.notes()[0].text === "edited" && s.session.notes()[0].lines === "old 1-2");
+  // This Node process owns no hunk session: failed agent export must not erase user notes
+  // or pretend it completed with zero notes. Removing the failed note clears the error.
+  const agent = { id: "agent-failure", source: "agent", fileKey: "opaque", anchor: {}, summary: "agent" };
+  await handlers.note_changed({ kind: "created", note: agent });
+  let exportError = "";
+  try { s.session.notes(); } catch (e) { exportError = e.message; }
+  check("failed daemon export is explicit, not an empty review", /No daemon session/.test(exportError));
+  check("failed daemon export preserves saved UI notes", JSON.parse(readFileSync(notesFile, "utf8")).notes[0].text === "edited");
+  handlers.note_changed({ kind: "removed", note: agent });
+  check("removing failed agent note clears export error", s.session.notes()[0].text === "edited");
   handlers.note_changed({ kind: "removed", note });
   s.session.child.stdout.resume();
   s.session.write("q");
@@ -117,7 +127,7 @@ export async function regressions({ open, check, until }) {
   try {
     process.env.PATH = fixture;
     const missingScript = open();
-    check("missing script surfaces diagnostic after draining stderr", await until(() => missingScript.exitCode !== undefined) && missingScript.exitCode !== 0 && missingScript.drained && missingScript.has(/script.*not found/));
+    check("missing script surfaces diagnostic on exit", await until(() => missingScript.exitCode !== undefined) && missingScript.exitCode !== 0 && missingScript.has(/script.*not found/));
     missingScript.session.dispose();
     for (const [name, target] of Object.entries({ script: "/usr/bin/script", cat: "/bin/cat", stty: "/bin/stty", tty: "/usr/bin/tty" })) symlinkSync(target, `${fixture}/${name}`);
     const missingHunk = open();
@@ -126,7 +136,7 @@ export async function regressions({ open, check, until }) {
     writeFileSync(fixture + "/hunk", '#!/bin/sh\nprintf "FINAL_DIAGNOSTIC\\n"\nexit 7\n', { mode: 0o755 });
     const final = open();
     final.session.child.stdout.pause();
-    check("final buffered output survives exit", await until(() => final.exitCode !== undefined) && final.exitCode === 7 && final.drained && final.has(/FINAL_DIAGNOSTIC/));
+    check("final buffered output survives exit", await until(() => final.exitCode !== undefined) && final.exitCode === 7 && final.has(/FINAL_DIAGNOSTIC/));
     final.session.dispose();
   } finally {
     process.env.PATH = path;

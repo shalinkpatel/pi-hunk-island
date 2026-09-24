@@ -1,8 +1,9 @@
 // Headless v2 probe: real hunk in a script(1) pty, parsed by libghostty-vt, through the same
 // HunkSession the pi overlay uses. Run: node probe/pty-probe.mjs  (evidence: probe/pty-output.txt)
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 import { HunkSession } from "../extensions/hunk-pty.ts";
 import { regressions } from "./regressions.mjs";
 
@@ -18,8 +19,10 @@ const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 const until = async (pred, ms = 4000) => { const end = Date.now() + ms; while (!pred() && Date.now() < end) await sleep(50); return pred(); };
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 function descendants(pid) {
-  const rows = execFileSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" })
-    .trim().split("\n").map((line) => line.trim().split(/\s+/).map(Number));
+  // Hunk may launch its shared daemon under the first TUI; that service outlives reviews.
+  const rows = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
+    .trim().split("\n").filter(line => !/\/hunk daemon serve(?:\s|$)/.test(line))
+    .map((line) => line.trim().split(/\s+/, 2).map(Number));
   const pids = new Set([pid]);
   for (const parent of pids) for (const [child, ppid] of rows) if (ppid === parent) pids.add(child);
   return [...pids];
@@ -137,8 +140,9 @@ check("q quits hunk (exit 0)", await a.until(() => a.exitCode !== undefined) && 
 const notes = a.session.notes();
 say("notes after exit: " + JSON.stringify(notes));
 check("notes after exit: both, with file/hunk/lines", notes.length === 2 && notes[0].file === "src/math.ts" && notes[1].hunk === 1 && /^new \d/.test(notes[1].lines));
-check("exit callback waits for stdout and stderr EOF", a.drained);
-check("normal q reaps script/bash/cat/hunk", await until(() => normalTree.every(pid => !alive(pid)), 10000)); // 4s flaked under probe load
+check("exit callback does not wait for pipe drain", a.session.exited);
+check("normal q reaps script/bash/cat/hunk", await until(() => normalTree.every(pid => !alive(pid))),
+  normalTree.filter(alive).map(pid => execFileSync("ps", ["-p", String(pid), "-o", "pid,ppid,stat,command"], { encoding: "utf8" })).join("; "));
 const dir = a.session.dir;
 a.session.dispose();
 a.session.dispose();
@@ -184,6 +188,50 @@ await n.until(() => n.has(/AGENTNEW qz1/));
 check("agent note visible on open (new side)", n.has(/AGENTNEW qz1/));
 check("agent note visible on open (old side)", n.has(/AGENTOLD qz2/));
 n.session.dispose();
+
+// Repo mode: hunk diff runs inside the repository; the daemon session is live.
+const repo = mkdtempSync(tmpdir() + "/hunk-repo-probe-");
+const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" });
+const cli = (...args) => JSON.parse(execFileSync("hunk", ["session", ...args, "--json"], { encoding: "utf8", timeout: 5000 }));
+try {
+  git("init", "-q");
+  git("config", "user.name", "Probe"); git("config", "user.email", "probe@example.invalid");
+  writeFileSync(repo + "/review.txt", "before\n"); git("add", "."); git("commit", "-qm", "before");
+  writeFileSync(repo + "/review.txt", "after\n"); git("commit", "-qam", "after");
+  const d = open({ cwd: repo, subcommand: "diff", targets: ["HEAD~1", "HEAD"], paths: "review.txt" });
+  check("repo mode: hunk diff renders the range", await until(() => d.has(/@@/)));
+  const live = cli("list").sessions.find(s => s.cwd === repo || s.cwd === repo.replace(/^\/var\//, "/private/var/"));
+  check("daemon lists the live repo session", !!live);
+  const id = live.sessionId;
+  const hasNote = (text) => { try { return d.session.notes().some(n => n.text === text); } catch { return false; } };
+  d.session.write("c");
+  check("repo mode: TUI composer opens", await until(() => d.has(/Draft note/)));
+  d.session.write("USER NOTE qz4");
+  await until(() => d.has(/USER NOTE qz4/));
+  d.session.write("\x13"); // Ctrl+S, not Enter
+  check("repo mode: TUI note saved", await until(() => hasNote("USER NOTE qz4")));
+  // A second session in the same repo must not steal the first session's export.
+  const show = open({ cwd: repo, subcommand: "show", targets: ["HEAD"], paths: "review.txt" });
+  check("repo mode: hunk show renders commit", await until(() => show.has(/@@/)));
+  cli("comment", "add", id, "--file", "review.txt", "--new-line", "1", "--summary", "DAEMON NOTE qz3");
+  check("daemon comment is mirrored alongside user note", await until(() => hasNote("DAEMON NOTE qz3") && hasNote("USER NOTE qz4")));
+  check("daemon note resolves path, side and hunk", d.session.notes().some(n => n.text === "DAEMON NOTE qz3" && n.file === "review.txt" && n.lines === "new 1" && n.hunk === 0));
+  check("same-repo show session does not receive diff notes", show.session.notes().length === 0);
+  const comment = cli("comment", "list", id).comments.find(c => c.summary === "DAEMON NOTE qz3");
+  cli("comment", "rm", id, comment.commentId);
+  check("daemon removal preserves user notes", await until(() => !hasNote("DAEMON NOTE qz3") && hasNote("USER NOTE qz4")));
+  cli("comment", "add", id, "--file", "review.txt", "--new-line", "1", "--summary", "QUIT RACE qz5");
+  d.session.write("q"); // no export wait: exercise the shutdown handler
+  check("repo mode: q quits cleanly", await until(() => d.exitCode !== undefined) && d.exitCode === 0);
+  check("daemon and user notes survive immediate quit", hasNote("QUIT RACE qz5") && hasNote("USER NOTE qz4"));
+  d.session.dispose(); show.session.dispose();
+  writeFileSync(repo + "/review.txt", "staged-only\n"); git("add", "review.txt");
+  writeFileSync(repo + "/untracked.txt", "untracked\n");
+  const working = open({ cwd: repo, subcommand: "diff", targets: ["HEAD"] });
+  check("default HEAD comparison includes staged-only changes", await until(() => working.has(/staged-only/)));
+  check("default comparison excludes untracked files like git diff HEAD", !working.has(/untracked.txt/));
+  working.session.dispose();
+} finally { rmSync(repo, { recursive: true, force: true }); }
 
 await regressions({ open, check, until });
 const wiring = execFileSync("pi", ["-ne", "-e", REPO + "probe/wiring.ts", "--list-models"], { encoding: "utf8", timeout: 90000 });

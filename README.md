@@ -1,7 +1,7 @@
 # pi-hunk-island
 
 Prototype: review a diff in the **real hunk TUI** inside a pi overlay. The extension runs
-`hunk patch` in a pty (macOS `script(1)`), parses its output with Ghostty's VT engine
+`hunk diff`, `hunk show`, or `hunk patch` in a pty (macOS `script(1)`), parses its output with Ghostty's VT engine
 (`@coder/libghostty-vt-node`), and paints the grid full-screen. Keys and mouse go to hunk
 untouched; reviews are non-blocking and notes go back to the agent.
 
@@ -17,7 +17,22 @@ removed v1 island design).
   optional `notes` seed the review as agent annotations beside the diff lines (new or old side;
   any markup opts into `--experimental`).
 - `hunk_notes` tool — the agent collects the outcome by session id: live status (with notes so
-  far) while you review, your notes after you quit hunk.
+  far) while you review, your notes after you quit hunk. Repeated reads are safe; the latest
+  20 finished results stay available until pi restarts. Quit with zero notes, cancellation,
+  export failure, and unknown/expired ids have distinct results.
+
+Tool sources:
+- `hunk_review({cwd, base: "main", ref: "HEAD"})` runs `hunk diff main HEAD` (direct endpoints).
+  Without a base it reviews tracked changes against HEAD, including staged changes.
+- `hunk_review({cwd, mode: "show", ref: "HEAD"})` reviews one commit.
+- `hunk_review({patch: "diff --git ...", title: "Review"})` reviews supplied unified diff text.
+- `pr` uses `gh pr diff` and patch mode. Explicit `mode: "patch"` retains the old
+  `base...ref` merge-base comparison.
+
+Diff/show sessions support live `hunk session` navigation and comments. Use `hunk session list
+--json` to get hunk's UUID (different from pi's `hunk-N` id), then `hunk session comment add
+<uuid> --file <path> --new-line <n> --summary <text>`. Saved user notes and daemon comments
+both return through `hunk_notes`; seeded sidecar annotations are not echoed back.
 
 Inside the overlay everything is hunk (`c` note, Ctrl+S save, `E`/`R`/`D`, `?` help, F10 menus,
 your `[keybindings]`). `q` (or Ctrl+C) quits hunk and returns the saved notes. **Ctrl+Q** is the

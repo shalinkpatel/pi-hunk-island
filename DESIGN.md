@@ -277,9 +277,37 @@ immediately; the overlay keeps running under pi independent of the tool call. hu
 is the collector: while the review is open it returns a live status with the notes saved so far
 (read straight from notes.json, which the pi-notes hunk extension writes on every save), and
 once hunk quits it returns the final outcome - formatted notes, cancelled, or the failure text.
-Finished sessions are consumed on read; unclosed open entries and finished ones trim at 20.
+Finished sessions remain readable on repeated collection. Keep the latest 20 finished results;
+never evict an open review. External overlay disposal closes the registry entry too.
 
 The command path is non-blocking too and auto-delivers on exit (notes as a user message,
 followUp when the agent is busy), so both entry points share the registry and one exit path.
 Spawn failures and corrupt notes land in the registry entry instead of throwing from the tool
 and surface through hunk_notes or the command notify.
+
+## j.14 repository modes, immediate exit, repeatable collection
+
+The tool defaults to `hunk diff <base> <ref>` (direct endpoints), or `hunk diff HEAD`
+for tracked working-tree/index changes. `mode: "show"` launches `hunk show <ref>`.
+PRs and supplied `patch` text use patch mode; explicit computed patch mode retains
+`git diff base...ref`. Reject conflicting inputs and option-shaped/empty refs before launch.
+All modes pass cwd, pathspecs and seeded agent annotations through the same PTY session.
+
+Close the overlay on the child `exit` event. Consume only bytes already buffered, snapshot
+VT/notes before disposal, and guard the later `close` event against duplicate completion.
+No drain timer or EOF wait. Retain the latest 20 finished results; collection never consumes
+one. Normal quit without notes is distinct from cancellation and unknown/expired ids.
+
+Hunk 0.22 daemon comments emit only `note_changed`, not UI `note_created`/`note_edited`.
+Its event payload carries an opaque fileKey; event ctx has no review snapshot. Keep synchronous
+UI mirroring (preserves selected ranges), but resolve daemon note paths through the public
+`session comment list` CLI asynchronously. A synchronous CLI call inside hunk can deadlock
+its own TUI. Select the exact session by `process.pid`, never an ambiguous repo selector.
+Guard in-flight reads against removal/replacement. Await pending exports during hunk's bounded
+shutdown window; incomplete/failed exports remain explicit errors, including retained notes,
+rather than claiming zero notes. No polling or private fileKey hash implementation.
+
+Checks cover real diff/show in an isolated git fixture, Ctrl+S user saves, daemon add/remove,
+two sessions in one repo, immediate quit after a daemon add, repeatable collection/retention,
+export failures, and immediate overlay completion with undrained pipes. Process-tree tests
+exclude hunk's intentionally persistent shared daemon (the former apparent reap flake).

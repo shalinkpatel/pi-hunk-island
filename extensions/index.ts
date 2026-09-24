@@ -11,9 +11,9 @@ import {
   type Component,
   type TUI,
 } from "@earendil-works/pi-tui";
-import { HunkSession, type AgentNote, type ReviewNote } from "./hunk-pty.ts";
+import { HunkSession, type AgentNote, type HunkSessionOptions, type ReviewNote } from "./hunk-pty.ts";
 
-type Source = ({ patchFile: string } | { patchText: string; title: string }) & { agentNotes?: AgentNote[] };
+type Source = Omit<HunkSessionOptions, "cwd" | "cols" | "rows" | "kitty" | "onUpdate" | "onExit">;
 type OverlayResult =
   | { kind: "exit"; code: number | null; notes: ReviewNote[]; screen: string }
   | { kind: "cancel" }
@@ -139,7 +139,7 @@ class HunkReviewOverlay implements Component {
   }
 
   dispose(): void {
-    this.teardown();
+    this.close({ kind: "cancel" });
   }
 }
 
@@ -159,12 +159,10 @@ type ReviewEntry = {
 const reviews = new Map<string, ReviewEntry>();
 let reviewSeq = 0;
 
-// Finished entries are deleted on read; drop old finished ones so a long session cannot grow this.
+// Keep the latest 20 finished reviews readable; never evict an open review.
 function trimReviews(): void {
-  for (const [id, entry] of reviews) {
-    if (reviews.size <= 20) break;
-    if (!entry.open) reviews.delete(id);
-  }
+  const finished = [...reviews.values()].filter((entry) => !entry.open);
+  for (const entry of finished.slice(0, -20)) reviews.delete(entry.id);
 }
 
 /** Open the overlay and return its review id immediately; the caller never waits for hunk. */
@@ -184,6 +182,10 @@ function openReview(
         const overlay = new HunkReviewOverlay(tui, repoDir, source, (result) => {
           entry.open = false;
           entry.result = result;
+          entry.overlay = undefined;
+          reviews.delete(entry.id);
+          reviews.set(entry.id, entry); // retention order is completion, not launch time
+          trimReviews();
           done(result);
           onExit?.(entry);
         });
@@ -195,6 +197,11 @@ function openReview(
     .catch((error: unknown) => {
       entry.open = false;
       entry.result = { kind: "error", message: formatError(error) };
+      entry.overlay = undefined;
+      reviews.delete(entry.id);
+      reviews.set(entry.id, entry);
+      trimReviews();
+      onExit?.(entry);
     });
   return entry.id;
 }
@@ -266,23 +273,34 @@ export default function (pi: ExtensionAPI) {
     label: "Hunk review",
     description:
       "Open the real hunk diff review TUI in an overlay for the user. Returns immediately with a " +
-      "review id; it does NOT wait for the review to finish. Use when the user wants to review " +
-      "changes and leave comments. Picks the diff source from args: " +
-      "pr (GitHub PR number), base (+optional ref, default HEAD) for git diff base...ref, " +
-      "or neither for working-tree changes vs HEAD. Optionally paths filters by pathspec. " +
+      "review id; it does NOT wait for the review to finish. Modes: diff (default for base or " +
+      "working tree) and show run hunk INSIDE the repository (cwd), so hunk session commands " +
+      "(navigate, comment add, reload) work live from the shell mid-review; patch (default for " +
+      "pr or a direct patch string) feeds a computed unified diff to hunk patch instead. Sources: " +
+      "pr (GitHub PR number), base (+optional ref, default HEAD), or neither (working tree); " +
+      "paths filters by pathspec. " +
       "Optional notes seed the review: they render beside the diff lines as agent annotations the user " +
       "sees on open and can reply to; replies and any other notes the user writes come back via hunk_notes. " +
       "After the user quits hunk (q), call hunk_notes with the returned id to collect their notes as " +
       "{file, hunk, lines, text}: hunk is the 1-based hunk index in that file, lines is the hunk's " +
-      "new-side line range (empty for whole-file deletions). Ctrl+Q force-cancels and discards. " +
+      "side and line range. Ctrl+Q force-cancels and discards. " +
       "Interactive sessions only.",
     parameters: Type.Object({
       pr: Type.Optional(Type.Number({ description: "GitHub PR number to review (gh pr diff <n>)" })),
       base: Type.Optional(
-        Type.String({ description: "Base ref; reviews git diff <base>...<ref>. Mutually exclusive with pr" }),
+        Type.String({ description: "Base ref; diff mode compares base to ref directly; patch mode uses base...ref (merge base). Exclusive with pr" }),
       ),
-      ref: Type.Optional(Type.String({ description: "Head ref, default HEAD. Requires base" })),
+      ref: Type.Optional(Type.String({ description: "Head ref, default HEAD. Requires base, except in show mode" })),
       paths: Type.Optional(Type.String({ description: "Optional pathspec filter (git diff only)" })),
+      mode: Type.Optional(
+        Type.Union([Type.Literal("diff"), Type.Literal("patch"), Type.Literal("show")], {
+          description: "Review mode: diff and show run in the repository (live session commands); patch feeds computed diff text",
+        }),
+      ),
+      patch: Type.Optional(
+        Type.String({ description: "Unified diff text to review directly (implies patch mode); exclusive with pr/base/ref/paths" }),
+      ),
+      title: Type.Optional(Type.String({ description: "Display title for the review" })),
       cwd: Type.Optional(
         Type.String({
           description: "Repository directory whose git repo to diff; git and gh resolve the repo from here. Default the session cwd; relative paths resolve against the session cwd.",
@@ -314,7 +332,16 @@ export default function (pi: ExtensionAPI) {
       const blocked = unsupported();
       if (blocked) return reply(blocked);
       if (params.pr !== undefined && params.base) return reply("Pass either pr or base, not both.");
-      if (params.ref && !params.base) return reply("ref requires base.");
+      if (params.patch !== undefined && (params.pr !== undefined || params.base !== undefined || params.ref !== undefined || params.paths !== undefined)) {
+        return reply("patch is exclusive: drop pr/base/ref/paths.");
+      }
+      if (params.patch !== undefined && params.mode !== undefined && params.mode !== "patch") return reply("patch requires patch mode.");
+      const mode = params.mode ?? (params.patch !== undefined || params.pr !== undefined ? "patch" : "diff");
+      if (mode === "show" && params.base !== undefined) return reply("show accepts ref, not base.");
+      if (params.ref && !params.base && mode !== "show") return reply("ref requires base.");
+      for (const ref of [params.base, params.ref]) {
+        if (ref !== undefined && (!ref.trim() || ref.startsWith("-"))) return reply("Refs must be nonempty and must not start with '-'.");
+      }
       let repoDir = ctx.cwd;
       if (params.cwd) {
         repoDir = path.resolve(ctx.cwd, params.cwd);
@@ -322,13 +349,40 @@ export default function (pi: ExtensionAPI) {
           return reply(`cwd is not a directory: ${repoDir}`);
         }
       }
-      const [patch, title] = await computePatch(repoDir, params);
-      if (patch === null) return reply(title);
-      if (!patch.trim()) return reply(`No changes to review (${title}).`);
-      const id = openReview(ctx, { patchText: patch, title, agentNotes: params.notes }, repoDir, title);
+      if (mode !== "patch" && params.pr !== undefined) {
+        return reply("pr reviews as a patch (no local refs); drop pr to review the repository with diff mode.");
+      }
+      let source: Source;
+      let title: string;
+      if (params.patch !== undefined) {
+        if (!params.patch.trim()) return reply("No changes in the provided patch.");
+        title = params.title ?? "patch";
+        source = { patchText: params.patch, title, agentNotes: params.notes };
+      } else if (mode === "patch") {
+        const [patch, patchTitle] = await computePatch(repoDir, params);
+        if (patch === null) return reply(patchTitle);
+        if (!patch.trim()) return reply(`No changes to review (${patchTitle}).`);
+        title = params.title ?? patchTitle;
+        source = { patchText: patch, title: patchTitle, agentNotes: params.notes };
+      } else if (mode === "show") {
+        const ref = params.ref ?? "HEAD";
+        const r = await runCapture("git", ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], repoDir);
+        if (r.failed) return reply(`git rev-parse ${ref} failed: ${r.stderr.trim() || "unknown error"}`);
+        title = params.title ?? "show " + ref;
+        source = { subcommand: "show", targets: [ref], paths: params.paths, agentNotes: params.notes };
+      } else {
+        const targets = params.base ? [params.base, params.ref ?? "HEAD"] : ["HEAD"];
+        const r = await runCapture("git", ["diff", "--name-only", ...targets, ...(params.paths ? ["--", params.paths] : [])], repoDir);
+        if (r.failed) return reply(`git diff ${targets.join(" ")} failed: ${r.stderr.trim() || "unknown error"}`);
+        if (!r.stdout.trim()) return reply(`No changes to review (${params.base ? params.base + ".." + (params.ref ?? "HEAD") : "working tree"}).`);
+        title = params.title ?? (params.base ? params.base + ".." + (params.ref ?? "HEAD") : "working tree");
+        source = { subcommand: "diff", targets, paths: params.paths, agentNotes: params.notes };
+      }
+      const id = openReview(ctx, source, repoDir, title);
+      const live = mode === "diff" || mode === "show" ? " The review runs in the repository: hunk session commands (navigate, comment add) work live from the shell. Use hunk session list --json for its UUID (not this hunk-N id)." : "";
       return reply(
         "Review " + id + " opened (" + title + "). Ask the user to review in the overlay and quit hunk (q) " +
-        "when done, then call hunk_notes with id " + id + ". Ctrl+Q force-cancels and discards.",
+        "when done, then call hunk_notes with id " + id + "." + live + " Ctrl+Q force-cancels and discards.",
       );
     },
   });
@@ -341,8 +395,9 @@ export default function (pi: ExtensionAPI) {
       "Collect the outcome of a hunk review session opened by hunk_review; pass the id it returned. " +
       "While the review is still open, returns a live status with the notes saved so far. " +
       "After the user quits hunk, returns their notes as {file, hunk, lines, text} (hunk 1-based, lines " +
-      "the new-side range), or that they cancelled or the review failed. Finished sessions are consumed " +
-      "on read, so call once to collect.",
+      "the side and line range), or that they saved none, force-cancelled, or the review failed. Finished " +
+      "sessions stay readable (latest 20): repeated reads return the same outcome, and a read can never eat a " +
+      "result racing the quit.",
     parameters: Type.Object({
       id: Type.String({ description: "Session id returned by hunk_review" }),
     }),
@@ -351,7 +406,10 @@ export default function (pi: ExtensionAPI) {
       const entry = reviews.get(params.id);
       if (!entry) {
         const known = [...reviews].map(([id, e]) => id + (e.open ? " (open)" : ""));
-        return reply("No review session " + params.id + "." + (known.length ? " Known: " + known.join(", ") + "." : ""));
+        return reply(
+          "No review session " + params.id + ". Unknown or expired id (only the last 20 finished reviews are retained; pi restart resets ids)." +
+            (known.length ? " Known: " + known.join(", ") + "." : ""),
+        );
       }
       if (entry.open) {
         let soFar = 0;
@@ -365,11 +423,13 @@ export default function (pi: ExtensionAPI) {
             " note(s) saved so far. Ask the user to quit hunk (q) when done, then call again.",
         );
       }
-      reviews.delete(entry.id);
       const result = entry.result;
-      if (!result || result.kind === "cancel") return reply("User cancelled the review.");
+      if (!result || result.kind === "cancel") return reply("User force-cancelled the review (Ctrl+Q); notes were discarded.");
       if (result.kind === "error") return reply("hunk review failed: " + result.message);
-      return reply(exitError(result) ?? formatNotes(entry.title, result.notes));
+      const failed = exitError(result);
+      if (failed) return reply(failed);
+      if (result.notes.length === 0) return reply("User quit hunk on " + entry.title + " without saving any notes.");
+      return reply(formatNotes(entry.title, result.notes));
     },
   });
 }
