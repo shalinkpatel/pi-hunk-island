@@ -625,6 +625,10 @@ cells, note create/edit/draft/delete-last, mouse symmetry, cancel with saved not
 without completion. Real hunk still decodes CSI-u text and Ctrl+S without the kitty handshake;
 kitty repeat events still act as presses.
 
+Minimality pass removes unused `hunkBin`, `alive`, and the `formatNotes` export, the redundant
+disposed flag and tty cache, per-row serializer bookkeeping, duplicate git-diff branches, and
+repeated tool-result envelopes. No extra dependency, transport, or generic terminal parser.
+
 The old orphan test used invalid patch text, never proved hunk was alive, and searched command
 strings (missing bare cat and zombies). It now waits for real hunk UI and tracks descendant PIDs.
 The interactive test now fails on timeout/nonzero/signal exit instead of printing

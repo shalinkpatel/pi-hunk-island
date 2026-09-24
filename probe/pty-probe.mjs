@@ -11,7 +11,7 @@ const SAMPLE = REPO + "probe/sample.diff";
 const log = [];
 const say = (s) => { log.push(s); console.log(s); };
 let failed = 0;
-const check = (name, ok, extra = "") => { if (!ok) failed++; say(`${ok ? "PASS" : "FAIL"} ${name}${extra ? "  " + extra : ""}`); };
+const check = (name, ok, extra = "") => { if (!ok) failed++; say(`${ok ? "PASS" : "FAIL"} ${name}${!ok && extra ? "  " + extra : ""}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 

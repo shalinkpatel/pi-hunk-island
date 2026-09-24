@@ -28,7 +28,6 @@ export type HunkSessionOptions = {
   title?: string;
   onUpdate: () => void;
   onExit: (code: number | null) => void;
-  hunkBin?: string;
 };
 
 function rgb(hex: string): string {
@@ -71,7 +70,7 @@ export class HunkSession {
       }
       this.term = createTerminal({ cols: this.cols, rows: this.rows, scrollbackLimit: 0 });
       this.child = spawn("/bin/bash", ["-c", WRAPPER, INNER, String(this.cols), String(this.rows),
-        join(this.dir, "tty"), opts.hunkBin ?? "hunk", "patch", "--extension", NOTES_EXTENSION, patchFile], {
+        join(this.dir, "tty"), "hunk", "patch", "--extension", NOTES_EXTENSION, patchFile], {
         cwd: opts.cwd,
         env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", PI_HUNK_NOTES_FILE: this.notesFile },
         stdio: ["pipe", "pipe", "pipe"],
@@ -170,10 +169,6 @@ export class HunkSession {
       throw new Error(`Invalid review notes in ${this.notesFile}`);
     }
     return notes;
-  }
-
-  get alive(): boolean {
-    return !this.exited;
   }
 
   /** Kill hunk, free the VT, delete the session dir. Idempotent; does not call onExit. */

@@ -1,7 +1,7 @@
 PASS hunk menu bar in VT grid
 PASS hunk patch title
 PASS @@ hunk header
-PASS lines(): one per row  got 30
+PASS lines(): one per row
 PASS lines(): each exactly 100 cells
 PASS lines(): 24-bit SGR colours
 screen (unanswered/legacy session):
@@ -21,38 +21,38 @@ PASS hunk queries kitty flags (CSI ? u)
 PASS hunk also sends DA1 sentinel (CSI c)
 PASS unanswered: hunk stays legacy (no CSI > flags u)
 PASS unanswered: modifyOtherKeys on (CSI > 4;1 m)
-PASS answered (CSI ? 0 u): hunk pushes kitty flags  "\u001b[>5u"
+PASS answered (CSI ? 0 u): hunk pushes kitty flags
 PASS answered: hunk turns modifyOtherKeys off (CSI > 4;0 m)
 PASS kitty session: CSI-u 'c' opens hunk note editor
 PASS kitty session: CSI-u text typed
 PASS kitty repeat event types a character
 PASS kitty session: CSI-u ctrl+s saves the note
-PASS kitty session: note mirrored to file  [{"file":"src/math.ts","hunk":0,"lines":"new 1","text":"hi"}]
-PASS kitty session: CSI-u q quits hunk (exit 0)  code 0
+PASS kitty session: note mirrored to file
+PASS kitty session: CSI-u q quits hunk (exit 0)
 PASS kitty session: notes still readable after exit
 PASS legacy session: CSI-u 'c' also decoded (parser is protocol-agnostic)
 PASS legacy session: legacy Esc closes the draft
 PASS legacy: CSI-u text decoded without handshake
 PASS legacy: note saved
-PASS legacy: second note saved  [{"file":"src/math.ts","hunk":0,"lines":"new 1","text":"first note"},{"file":"src/math.ts","hunk":1,"lines":"new 21","text":"second note"}]
+PASS legacy: second note saved
 PASS legacy: D deletes the note from the mirror
 PASS resize accepted
 PASS hunk redrew at 80 cols
 PASS lines(): 20 rows x 80 cells after resize
 PASS SGR mouse wheel bytes scroll the diff
 PASS hunk enabled SGR mouse (?1006h) in its own pty
-PASS q quits hunk (exit 0)  code 0
+PASS q quits hunk (exit 0)
 notes after exit: [{"file":"src/math.ts","hunk":0,"lines":"new 1","text":"first note"},{"file":"src/math.ts","hunk":1,"lines":"new 21","text":"second note"}]
 PASS notes after exit: both, with file/hunk/lines
 PASS exit callback waits for stdout and stderr EOF
 PASS dispose is idempotent and removes the session dir
 PASS disposed session renders safely
 PASS patchText mode: title from <title>.diff
-PASS dispose probe captured script, bash, cat, hunk  79832,79833,79835,79834
+PASS dispose probe captured script, bash, cat, hunk
 PASS dispose() reaps entire process tree (including cat/zombies)
 PASS dispose() while alive: onExit not delivered
 PASS SIGKILL probe reached real hunk UI
-PASS SIGKILL probe captured host plus all four children  79844,79845,79846,79848,79847
+PASS SIGKILL probe captured host plus all four children
 PASS host SIGKILLed without dispose: entire tree reaped
 PASS fault probe reached hunk UI
 PASS legacy mode never answers kitty

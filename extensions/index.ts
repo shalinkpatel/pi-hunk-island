@@ -33,12 +33,9 @@ function formatError(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
-export function formatNotes(title: string, notes: ReviewNote[]): string {
+function formatNotes(title: string, notes: ReviewNote[]): string {
   const lines = [`Review notes on ${title} (${notes.length}):`];
-  if (notes.length === 0) {
-    lines.push("none");
-    return lines.join("\n");
-  }
+  if (notes.length === 0) lines.push("none");
   for (const note of notes) {
     lines.push(`- \`${note.file}\` hunk ${note.hunk + 1} (${note.lines}): ${note.text.replace(/\n/g, "\n  ")}`);
   }
@@ -59,7 +56,7 @@ function runCapture(cmd: string, args: string[], cwd: string): Promise<{ stdout:
   });
 }
 
-/** Compute a unified diff from agent-chosen args. Returns [patch, title, error]. */
+/** Compute a unified diff. Returns [patch, title] or [null, error]. */
 async function computePatch(
   cwd: string,
   args: { pr?: number; base?: string; ref?: string; paths?: string },
@@ -71,15 +68,10 @@ async function computePatch(
     if (r.failed) return [null, `gh pr diff ${args.pr} failed: ${r.stderr.trim() || "unknown error"}`];
     return [r.stdout, `PR #${args.pr}`];
   }
-  if (args.base) {
-    const ref = args.ref ?? "HEAD";
-    const r = await runCapture("git", ["diff", `${args.base}...${ref}`, ...pathArgs], cwd);
-    if (r.failed) return [null, `git diff ${args.base}...${ref} failed: ${r.stderr.trim() || "unknown error"}`];
-    return [r.stdout, `${args.base}...${ref}`];
-  }
-  const r = await runCapture("git", ["diff", "HEAD", ...pathArgs], cwd);
-  if (r.failed) return [null, `git diff HEAD failed: ${r.stderr.trim() || "unknown error"}`];
-  return [r.stdout, "working tree"];
+  const range = args.base ? `${args.base}...${args.ref ?? "HEAD"}` : "HEAD";
+  const r = await runCapture("git", ["diff", range, ...pathArgs], cwd);
+  if (r.failed) return [null, `git diff ${range} failed: ${r.stderr.trim() || "unknown error"}`];
+  return [r.stdout, args.base ? range : "working tree"];
 }
 
 /** Full-screen overlay showing the real hunk TUI (DESIGN.md j). */
@@ -241,57 +233,18 @@ export default function (pi: ExtensionAPI) {
       paths: Type.Optional(Type.String({ description: "Optional pathspec filter (git diff only)" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (ctx.mode !== "tui") {
-        return {
-          content: [{ type: "text", text: "hunk_review needs an interactive (tui) session." }],
-          details: {} as Record<string, never>,
-        };
-      }
+      const reply = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
+      if (ctx.mode !== "tui") return reply("hunk_review needs an interactive (tui) session.");
       const blocked = unsupported();
-      if (blocked) {
-        return { content: [{ type: "text", text: blocked }], details: {} };
-      }
-      if (params.pr !== undefined && params.base) {
-        return {
-          content: [{ type: "text", text: "Pass either pr or base, not both." }],
-          details: {},
-        };
-      }
-      if (params.ref && !params.base) {
-        return {
-          content: [{ type: "text", text: "ref requires base." }],
-          details: {},
-        };
-      }
-      const [patch, titleOrError] = await computePatch(ctx.cwd, params);
-      if (patch === null) {
-        return {
-          content: [{ type: "text", text: titleOrError }],
-          details: {},
-        };
-      }
-      if (!patch.trim()) {
-        return {
-          content: [{ type: "text", text: `No changes to review (${titleOrError}).` }],
-          details: {},
-        };
-      }
-      const title = titleOrError;
+      if (blocked) return reply(blocked);
+      if (params.pr !== undefined && params.base) return reply("Pass either pr or base, not both.");
+      if (params.ref && !params.base) return reply("ref requires base.");
+      const [patch, title] = await computePatch(ctx.cwd, params);
+      if (patch === null) return reply(title);
+      if (!patch.trim()) return reply(`No changes to review (${title}).`);
       const result = await openReview(ctx, { patchText: patch, title });
-      if (!result || result.kind === "cancel") {
-        return {
-          content: [{ type: "text", text: "User cancelled the review." }],
-          details: {},
-        };
-      }
-      const failed = exitError(result);
-      if (failed) {
-        return { content: [{ type: "text", text: failed }], details: {} };
-      }
-      return {
-        content: [{ type: "text", text: formatNotes(title, result.notes) }],
-        details: {},
-      };
+      if (!result || result.kind === "cancel") return reply("User cancelled the review.");
+      return reply(exitError(result) ?? formatNotes(title, result.notes));
     },
   });
 }

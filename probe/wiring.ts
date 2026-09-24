@@ -38,10 +38,22 @@ export default async function () {
     assert.equal(readFileSync(fixture + "/args", "utf8"), "diff\nHEAD\n");
     assert.match(await run({ base: "main", ref: "topic", paths: "space name" }), /main\.\.\.topic/);
     assert.equal(readFileSync(fixture + "/args", "utf8"), "diff\nmain...topic\n--\nspace name\n");
+    assert.match(await run({ base: "main" }), /main\.\.\.HEAD/);
+    assert.equal(readFileSync(fixture + "/args", "utf8"), "diff\nmain...HEAD\n");
     assert.match(await run({ pr: 123 }), /PR #123/);
     assert.equal(readFileSync(fixture + "/args", "utf8"), "pr\ndiff\n123\n");
     result = { kind: "cancel" };
     assert.equal(await run(), "User cancelled the review.");
+    result = { kind: "exit", code: 0, screen: "", notes: [] };
+    assert.equal(await run(), "Review notes on working tree (0):\nnone");
+    result = { kind: "exit", code: 7, screen: "failed", notes: [] };
+    assert.equal(await run(), "hunk exited with code 7: failed");
+    result.notes = [note];
+    assert.match(await run(), /Review notes on working tree/); // retain notes even on abnormal exit
+    writeFileSync(fixture + "/git", "#!/bin/sh\nexit 0\n");
+    assert.equal(await run(), "No changes to review (working tree).");
+    writeFileSync(fixture + "/git", "#!/bin/sh\necho broken >&2\nexit 7\n");
+    assert.equal(await run({ base: "main" }), "git diff main...HEAD failed: broken");
   } finally {
     process.env.PATH = path;
     rmSync(fixture, { recursive: true, force: true });
