@@ -3,19 +3,21 @@
 Prototype: review a diff in the **real hunk TUI** inside a pi overlay. The extension runs
 `hunk patch` in a pty (macOS `script(1)`), parses its output with Ghostty's VT engine
 (`@coder/libghostty-vt-node`), and paints the grid full-screen. Keys and mouse go to hunk
-untouched; when you quit hunk, your notes go back to the agent.
+untouched; reviews are non-blocking and notes go back to the agent.
 
 Status: prototype. Decisions and probe evidence: DESIGN.md section j (earlier sections are the
 removed v1 island design).
 
 ## Use
 
-- `/hunk-review <diff-file>` — review a patch file; notes arrive as a user message.
-- `hunk_review` tool — the agent picks `pr` (GitHub PR), `base` (+`ref`, default HEAD), or
-  neither (working tree), optional `paths` and `cwd` (repository directory to diff, default
-  session cwd); optional `notes` seed the review as agent annotations beside the diff lines
-  (new or old side; any markup opts into `--experimental`); the user's notes come back as the
-  tool result.
+- `/hunk-review <diff-file>` — opens the review; when you quit hunk, your notes go to the agent
+  as a user message.
+- `hunk_review` tool — the agent opens a review the same way and gets a session id back
+  immediately (it never blocks); optional `cwd` picks the repository directory to diff,
+  optional `notes` seed the review as agent annotations beside the diff lines (new or old side;
+  any markup opts into `--experimental`).
+- `hunk_notes` tool — the agent collects the outcome by session id: live status (with notes so
+  far) while you review, your notes after you quit hunk.
 
 Inside the overlay everything is hunk (`c` note, Ctrl+S save, `E`/`R`/`D`, `?` help, F10 menus,
 your `[keybindings]`). `q` (or Ctrl+C) quits hunk and returns the saved notes. **Ctrl+Q** is the

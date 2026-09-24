@@ -76,7 +76,7 @@ async function computePatch(
 
 /** Full-screen overlay showing the real hunk TUI (DESIGN.md j). */
 class HunkReviewOverlay implements Component {
-  private readonly session: HunkSession;
+  readonly session: HunkSession;
   private closed = false;
 
   constructor(
@@ -147,16 +147,56 @@ function unsupported(): string | null {
   return process.platform === "darwin" ? null : "hunk review overlay needs macOS (script(1) pty, DESIGN.md j.1).";
 }
 
-async function openReview(ctx: ExtensionContext, source: Source, repoDir: string = ctx.cwd) {
-  const result = await ctx.ui.custom<OverlayResult>(
-    (tui, _theme, _keybindings, done) => new HunkReviewOverlay(tui, repoDir, source, done),
-    {
-      overlay: true,
-      overlayOptions: { row: 0, col: 0, width: "100%", maxHeight: "100%", margin: 0 },
-    },
-  );
-  if (result?.kind === "error") throw new Error(result.message);
-  return result;
+/** One review, from open through collection. */
+type ReviewEntry = {
+  id: string;
+  title: string;
+  open: boolean;
+  result?: OverlayResult;
+  overlay?: HunkReviewOverlay;
+};
+
+const reviews = new Map<string, ReviewEntry>();
+let reviewSeq = 0;
+
+// Finished entries are deleted on read; drop old finished ones so a long session cannot grow this.
+function trimReviews(): void {
+  for (const [id, entry] of reviews) {
+    if (reviews.size <= 20) break;
+    if (!entry.open) reviews.delete(id);
+  }
+}
+
+/** Open the overlay and return its review id immediately; the caller never waits for hunk. */
+function openReview(
+  ctx: ExtensionContext,
+  source: Source,
+  repoDir: string,
+  title: string,
+  onExit?: (entry: ReviewEntry) => void,
+): string {
+  const entry: ReviewEntry = { id: "hunk-" + ++reviewSeq, title, open: true };
+  reviews.set(entry.id, entry);
+  trimReviews();
+  void ctx.ui
+    .custom<OverlayResult>(
+      (tui, _theme, _keybindings, done) => {
+        const overlay = new HunkReviewOverlay(tui, repoDir, source, (result) => {
+          entry.open = false;
+          entry.result = result;
+          done(result);
+          onExit?.(entry);
+        });
+        entry.overlay = overlay;
+        return overlay;
+      },
+      { overlay: true, overlayOptions: { row: 0, col: 0, width: "100%", maxHeight: "100%", margin: 0 } },
+    )
+    .catch((error: unknown) => {
+      entry.open = false;
+      entry.result = { kind: "error", message: formatError(error) };
+    });
+  return entry.id;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -191,24 +231,31 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       const title = path.basename(file);
-      const result = await openReview(ctx, { patchFile: file });
-      if (!result || result.kind === "cancel") {
-        ctx.ui.notify("Review cancelled.", "info");
-        return;
-      }
-      const failed = exitError(result);
-      if (failed) {
-        ctx.ui.notify(failed, "error");
-        return;
-      }
-      if (result.notes.length === 0) {
-        ctx.ui.notify("No review notes.", "info");
-        return;
-      }
-      pi.sendUserMessage(
-        formatNotes(title, result.notes),
-        ctx.isIdle() ? undefined : { deliverAs: "followUp" },
-      );
+      const id = openReview(ctx, { patchFile: file }, ctx.cwd, title, (entry) => {
+        const result = entry.result;
+        if (!result || result.kind === "cancel") {
+          ctx.ui.notify("Review cancelled.", "info");
+          return;
+        }
+        if (result.kind === "error") {
+          ctx.ui.notify("hunk review failed: " + result.message, "error");
+          return;
+        }
+        const failed = exitError(result);
+        if (failed) {
+          ctx.ui.notify(failed, "error");
+          return;
+        }
+        if (result.notes.length === 0) {
+          ctx.ui.notify("No review notes.", "info");
+          return;
+        }
+        pi.sendUserMessage(
+          formatNotes(entry.title, result.notes),
+          ctx.isIdle() ? undefined : { deliverAs: "followUp" },
+        );
+      });
+      ctx.ui.notify("Review " + id + " opened (" + title + "). Quit hunk (q) when done; notes go to the agent.", "info");
     },
   });
 
@@ -218,14 +265,16 @@ export default function (pi: ExtensionAPI) {
     name: "hunk_review",
     label: "Hunk review",
     description:
-      "Open the real hunk diff review TUI in an overlay for the user and wait for their notes. " +
-      "Use when the user wants to review changes and leave comments. Picks the diff source from args: " +
+      "Open the real hunk diff review TUI in an overlay for the user. Returns immediately with a " +
+      "review id; it does NOT wait for the review to finish. Use when the user wants to review " +
+      "changes and leave comments. Picks the diff source from args: " +
       "pr (GitHub PR number), base (+optional ref, default HEAD) for git diff base...ref, " +
       "or neither for working-tree changes vs HEAD. Optionally paths filters by pathspec. " +
       "Optional notes seed the review: they render beside the diff lines as agent annotations the user " +
-      "sees on open and can reply to; replies and any other notes the user writes come back to you. " +
-      "Returns those user notes when they quit hunk, as {file, hunk, lines, text}: hunk is the 1-based " +
-      "hunk index in that file, lines is the hunk's new-side line range (empty for whole-file deletions). " +
+      "sees on open and can reply to; replies and any other notes the user writes come back via hunk_notes. " +
+      "After the user quits hunk (q), call hunk_notes with the returned id to collect their notes as " +
+      "{file, hunk, lines, text}: hunk is the 1-based hunk index in that file, lines is the hunk's " +
+      "new-side line range (empty for whole-file deletions). Ctrl+Q force-cancels and discards. " +
       "Interactive sessions only.",
     parameters: Type.Object({
       pr: Type.Optional(Type.Number({ description: "GitHub PR number to review (gh pr diff <n>)" })),
@@ -276,9 +325,51 @@ export default function (pi: ExtensionAPI) {
       const [patch, title] = await computePatch(repoDir, params);
       if (patch === null) return reply(title);
       if (!patch.trim()) return reply(`No changes to review (${title}).`);
-      const result = await openReview(ctx, { patchText: patch, title, agentNotes: params.notes }, repoDir);
+      const id = openReview(ctx, { patchText: patch, title, agentNotes: params.notes }, repoDir, title);
+      return reply(
+        "Review " + id + " opened (" + title + "). Ask the user to review in the overlay and quit hunk (q) " +
+        "when done, then call hunk_notes with id " + id + ". Ctrl+Q force-cancels and discards.",
+      );
+    },
+  });
+
+  // Collector: fetch (or poll) the outcome of a review hunk_review opened.
+  pi.registerTool({
+    name: "hunk_notes",
+    label: "Hunk notes",
+    description:
+      "Collect the outcome of a hunk review session opened by hunk_review; pass the id it returned. " +
+      "While the review is still open, returns a live status with the notes saved so far. " +
+      "After the user quits hunk, returns their notes as {file, hunk, lines, text} (hunk 1-based, lines " +
+      "the new-side range), or that they cancelled or the review failed. Finished sessions are consumed " +
+      "on read, so call once to collect.",
+    parameters: Type.Object({
+      id: Type.String({ description: "Session id returned by hunk_review" }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      const reply = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
+      const entry = reviews.get(params.id);
+      if (!entry) {
+        const known = [...reviews].map(([id, e]) => id + (e.open ? " (open)" : ""));
+        return reply("No review session " + params.id + "." + (known.length ? " Known: " + known.join(", ") + "." : ""));
+      }
+      if (entry.open) {
+        let soFar = 0;
+        try {
+          soFar = entry.overlay?.session.notes().length ?? 0;
+        } catch {
+          // corrupt mid-write reads just report the open state
+        }
+        return reply(
+          "Review " + entry.id + " (" + entry.title + ") is still open; " + soFar +
+            " note(s) saved so far. Ask the user to quit hunk (q) when done, then call again.",
+        );
+      }
+      reviews.delete(entry.id);
+      const result = entry.result;
       if (!result || result.kind === "cancel") return reply("User cancelled the review.");
-      return reply(exitError(result) ?? formatNotes(title, result.notes));
+      if (result.kind === "error") return reply("hunk review failed: " + result.message);
+      return reply(exitError(result) ?? formatNotes(entry.title, result.notes));
     },
   });
 }

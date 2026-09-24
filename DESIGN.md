@@ -269,3 +269,17 @@ so file-relative hunk features like `e` (edit selected file) see the reviewed re
 remains the pi session cwd. One knob instead of a `--repo` flag for gh, because it also
 covers git diff and the session context; wiring.ts proves the knob with real git failing in a
 non-repo cwd.
+
+## j.13 non-blocking reviews (registry + hunk_notes)
+
+hunk_review no longer waits for hunk: openReview registers the review (id hunk-N) and returns
+immediately; the overlay keeps running under pi independent of the tool call. hunk_notes({id})
+is the collector: while the review is open it returns a live status with the notes saved so far
+(read straight from notes.json, which the pi-notes hunk extension writes on every save), and
+once hunk quits it returns the final outcome - formatted notes, cancelled, or the failure text.
+Finished sessions are consumed on read; unclosed open entries and finished ones trim at 20.
+
+The command path is non-blocking too and auto-delivers on exit (notes as a user message,
+followUp when the agent is busy), so both entry points share the registry and one exit path.
+Spawn failures and corrupt notes land in the registry entry instead of throwing from the tool
+and surface through hunk_notes or the command notify.
