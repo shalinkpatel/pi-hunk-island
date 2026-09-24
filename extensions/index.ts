@@ -147,9 +147,9 @@ function unsupported(): string | null {
   return process.platform === "darwin" ? null : "hunk review overlay needs macOS (script(1) pty, DESIGN.md j.1).";
 }
 
-async function openReview(ctx: ExtensionContext, source: Source) {
+async function openReview(ctx: ExtensionContext, source: Source, repoDir: string = ctx.cwd) {
   const result = await ctx.ui.custom<OverlayResult>(
-    (tui, _theme, _keybindings, done) => new HunkReviewOverlay(tui, ctx.cwd, source, done),
+    (tui, _theme, _keybindings, done) => new HunkReviewOverlay(tui, repoDir, source, done),
     {
       overlay: true,
       overlayOptions: { row: 0, col: 0, width: "100%", maxHeight: "100%", margin: 0 },
@@ -234,6 +234,11 @@ export default function (pi: ExtensionAPI) {
       ),
       ref: Type.Optional(Type.String({ description: "Head ref, default HEAD. Requires base" })),
       paths: Type.Optional(Type.String({ description: "Optional pathspec filter (git diff only)" })),
+      cwd: Type.Optional(
+        Type.String({
+          description: "Repository directory whose git repo to diff; git and gh resolve the repo from here. Default the session cwd; relative paths resolve against the session cwd.",
+        }),
+      ),
       notes: Type.Optional(
         Type.Array(
           Type.Object({
@@ -261,10 +266,17 @@ export default function (pi: ExtensionAPI) {
       if (blocked) return reply(blocked);
       if (params.pr !== undefined && params.base) return reply("Pass either pr or base, not both.");
       if (params.ref && !params.base) return reply("ref requires base.");
-      const [patch, title] = await computePatch(ctx.cwd, params);
+      let repoDir = ctx.cwd;
+      if (params.cwd) {
+        repoDir = path.resolve(ctx.cwd, params.cwd);
+        if (!(await fs.stat(repoDir).catch(() => null))?.isDirectory()) {
+          return reply(`cwd is not a directory: ${repoDir}`);
+        }
+      }
+      const [patch, title] = await computePatch(repoDir, params);
       if (patch === null) return reply(title);
       if (!patch.trim()) return reply(`No changes to review (${title}).`);
-      const result = await openReview(ctx, { patchText: patch, title, agentNotes: params.notes });
+      const result = await openReview(ctx, { patchText: patch, title, agentNotes: params.notes }, repoDir);
       if (!result || result.kind === "cancel") return reply("User cancelled the review.");
       return reply(exitError(result) ?? formatNotes(title, result.notes));
     },

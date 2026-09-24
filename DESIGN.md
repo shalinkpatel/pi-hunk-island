@@ -259,3 +259,13 @@ Patch mode stays: live comment add through the daemon remains unavailable (j.3),
 launch is the supported direction. Replies to agent notes are user notes anchored to the same
 line and come back like any other user note. The tool description documents the return shape
 {file, hunk (1-based), lines (new-side range), text} and the reply behavior.
+
+## j.12 review cwd knob
+
+`hunk_review` takes optional `cwd`: the directory whose git repo to diff (relative paths
+resolve against the session cwd). Validated to exist, then used as the working directory for
+`git diff` and `gh pr diff` — both resolve the repo from cwd — and as the hunk session cwd,
+so file-relative hunk features like `e` (edit selected file) see the reviewed repo. Default
+remains the pi session cwd. One knob instead of a `--repo` flag for gh, because it also
+covers git diff and the session context; wiring.ts proves the knob with real git failing in a
+non-repo cwd.

@@ -14,7 +14,7 @@ export default async function () {
     registerTool(spec) { assert.equal(spec.name, "hunk_review"); tool = spec; },
     sendUserMessage(...args) { sent = args; },
   } as any);
-  assert.deepEqual(Object.keys(tool.parameters.properties), ["pr", "base", "ref", "paths", "notes"]);
+  assert.deepEqual(Object.keys(tool.parameters.properties), ["pr", "base", "ref", "paths", "cwd", "notes"]);
   const cwd = fileURLToPath(new URL("..", import.meta.url));
   const note = { file: "x", hunk: 0, lines: "new 1", text: "first\nsecond" };
   let result: any = { kind: "exit", code: 0, screen: "", notes: [note] };
@@ -58,6 +58,9 @@ export default async function () {
     process.env.PATH = path;
     rmSync(fixture, { recursive: true, force: true });
   }
+  // Real git now: a non-repo cwd must fail inside that directory, proving the knob reaches computePatch.
+  assert.match(await run({ base: "main", cwd: "/tmp" }), /Not a git repository/);
+  assert.equal(await run({ base: "main", cwd: "no-such-dir" }), "cwd is not a directory: " + cwd + "no-such-dir");
   result = { kind: "exit", code: 0, screen: "", notes: [note] };
   await command.handler("probe/sample.diff", ctx);
   assert.match(sent[0], /Review notes on sample\.diff/);
