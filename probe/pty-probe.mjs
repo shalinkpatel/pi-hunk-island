@@ -130,12 +130,15 @@ check("SGR mouse wheel bytes scroll the diff", await a.until(() => a.session.tex
 check("hunk enabled SGR mouse (?1006h) in its own pty", a.raw.includes("\x1b[?1006h"));
 
 // 7. Quit through hunk's own q; notes survive exit.
+const normalTree = descendants(a.session.child.pid);
+check("normal-quit probe captured all four processes", normalTree.length >= 4);
 a.session.write("q");
 check("q quits hunk (exit 0)", await a.until(() => a.exitCode !== undefined) && a.exitCode === 0, `code ${a.exitCode}`);
 const notes = a.session.notes();
 say("notes after exit: " + JSON.stringify(notes));
 check("notes after exit: both, with file/hunk/lines", notes.length === 2 && notes[0].file === "src/math.ts" && notes[1].hunk === 1 && /^new \d/.test(notes[1].lines));
 check("exit callback waits for stdout and stderr EOF", a.drained);
+check("normal q reaps script/bash/cat/hunk", await until(() => normalTree.every(pid => !alive(pid))));
 const dir = a.session.dir;
 a.session.dispose();
 a.session.dispose();

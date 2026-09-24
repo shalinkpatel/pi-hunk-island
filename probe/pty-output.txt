@@ -41,10 +41,12 @@ PASS hunk redrew at 80 cols
 PASS lines(): 20 rows x 80 cells after resize
 PASS SGR mouse wheel bytes scroll the diff
 PASS hunk enabled SGR mouse (?1006h) in its own pty
+PASS normal-quit probe captured all four processes
 PASS q quits hunk (exit 0)
 notes after exit: [{"file":"src/math.ts","hunk":0,"lines":"new 1","text":"first note"},{"file":"src/math.ts","hunk":1,"lines":"new 21","text":"second note"}]
 PASS notes after exit: both, with file/hunk/lines
 PASS exit callback waits for stdout and stderr EOF
+PASS normal q reaps script/bash/cat/hunk
 PASS dispose is idempotent and removes the session dir
 PASS disposed session renders safely
 PASS patchText mode: title from <title>.diff
