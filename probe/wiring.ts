@@ -72,32 +72,32 @@ export default async function () {
   assert.equal(await run({ base: "main", cwd: "no-such-dir" }), "cwd is not a directory: " + cwd + "no-such-dir");
   assert.match(await collect("hunk-999"), /No review session hunk-999\. Known:/);
 
-  const id1 = idOf(await run());
-  assert.match(await collect(id1), new RegExp("Review " + id1 + " \\(working tree\\) is still open; 0 note"));
+  const id1 = idOf(await run({ base: "HEAD~1" })); // deterministic in any clone, clean or dirty
+  assert.match(await collect(id1), new RegExp("Review " + id1 + " \\(HEAD~1\\.\\.\\.HEAD\\) is still open; 0 note"));
   writeFileSync(component.session.dir + "/notes.json", JSON.stringify([note]));
   component.session.child.emit("close", 0);
-  assert.equal(await collect(id1), "Review notes on working tree (1):\n- `x` hunk 1 (new 1): first\n  second");
+  assert.equal(await collect(id1), "Review notes on HEAD~1...HEAD (1):\n- `x` hunk 1 (new 1): first\n  second");
   assert.match(await collect(id1), /No review session/); // finished sessions are consumed on read
   component.dispose();
 
-  const id2 = idOf(await run()); // working tree: real uncommitted changes, unlike main...HEAD
+  const id2 = idOf(await run({ base: "HEAD~1" }));
   writeFileSync(component.session.dir + "/notes.json", JSON.stringify([note]));
   component.handleInput("\x11");
   assert.equal(await collect(id2), "User cancelled the review.");
   component.dispose();
 
-  const id3 = idOf(await run());
+  const id3 = idOf(await run({ base: "HEAD~1" }));
   component.session.child.emit("close", 7);
   assert.match(await collect(id3), /hunk exited with code 7/);
   component.dispose();
 
-  const id4 = idOf(await run());
+  const id4 = idOf(await run({ base: "HEAD~1" }));
   writeFileSync(component.session.dir + "/notes.json", JSON.stringify([note]));
   component.session.child.emit("close", 7);
-  assert.match(await collect(id4), /Review notes on working tree/); // notes retained on abnormal exit
+  assert.match(await collect(id4), /Review notes on HEAD~1...HEAD/); // notes retained on abnormal exit
   component.dispose();
 
-  const id5 = idOf(await run());
+  const id5 = idOf(await run({ base: "HEAD~1" }));
   writeFileSync(component.session.dir + "/notes.json", "null");
   component.session.child.emit("close", 0);
   assert.match(await collect(id5), /hunk review failed: Error: Invalid review notes/);
