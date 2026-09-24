@@ -4,3 +4,4 @@ probe/*.tmp*
 
 # pi-fabric runtime state, machine-local
 .pi/fabric/
+probe/pty-output.txt
