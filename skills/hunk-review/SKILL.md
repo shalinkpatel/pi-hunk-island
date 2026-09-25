@@ -1,6 +1,6 @@
 ---
 name: hunk-review
-description: Run a code review with the user inside pi through the hunk overlay (pi-hunk-island): open a diff or PR with seeded agent notes that give a reading order, watch the session so the user's notes wake the agent, reply in threads while the review is open, and collect the notes on quit. Use when the user asks to review a diff, PR, commit or stack in hunk, wants comments seeded, or asks you to watch a review and reply.
+description: "Run a code review with the user inside pi through the hunk overlay (pi-hunk-island). Open a diff or PR with seeded agent notes that give a reading order, watch the session so the user's notes wake the agent, reply in threads while the review is open, and collect the notes on quit. Use when the user asks to review a diff, PR, commit or stack in hunk, wants comments seeded, or asks you to watch a review and reply."
 ---
 
 # hunk review from inside pi
