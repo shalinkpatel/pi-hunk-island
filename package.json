@@ -8,7 +8,8 @@
     "pi-extension",
     "hunk",
     "diff",
-    "review"
+    "review",
+    "pi-skill"
   ],
   "type": "module",
   "license": "MIT",
@@ -16,7 +17,8 @@
     "extensions",
     "hunk-ext",
     "README.md",
-    "DESIGN.md"
+    "DESIGN.md",
+    "skills"
   ],
   "scripts": {
     "probe": "node probe/pty-probe.mjs",
@@ -46,6 +48,9 @@
   "pi": {
     "extensions": [
       "./extensions/index.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   }
 }
