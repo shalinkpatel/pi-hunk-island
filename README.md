@@ -38,6 +38,12 @@ Inside the overlay everything is hunk (`c` note, Ctrl+S save, `E`/`R`/`D`, `?` h
 your `[keybindings]`). `q` (or Ctrl+C) quits hunk and returns the saved notes. **Ctrl+Q** is the
 host escape hatch: kills hunk, discards notes.
 
+The package ships a skill, `hunk-review` (`skills/hunk-review/SKILL.md`, also `/skill:hunk-review`),
+that tells the agent how to run a whole review: seed numbered reading-order notes, open in
+`diff`/`show` mode inside the repository, arm `scripts/watch-notes.sh` under a pi-fabric wake
+monitor so your saves wake it, reply in threads with `hunk session comment add --reply-to`,
+and collect with `hunk_notes` on quit.
+
 ## Requirements
 
 macOS, `hunk` (>= 0.22) on PATH, Node >= 20.19. No native build: libghostty-vt-node ships a
