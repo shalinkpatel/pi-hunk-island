@@ -65,8 +65,10 @@ in every consumer install. npm here blocks install scripts by default, so a pi p
 would ship a broken pty. It would buy Linux support and in-process resize, neither worth a
 native build step for this prototype.
 
-Delta: **macOS only.** `package.json` has `"os": ["darwin"]` and both entry points refuse other
-platforms. Linux upgrade path: util-linux `script -qfec <cmd> /dev/null` and `stty -F`.
+Delta: **macOS + Linux.** `package.json` has `"os": ["darwin", "linux"]` and both entry points refuse
+other platforms. macOS: `script -q /dev/null <argv>` + `stty -f`. Linux: util-linux
+`script -qfec <cmd> /dev/null` (one -c command string, so the inner script is built with hunk's
+argv shell-quoted in place) + `stty -F`; verified headless on Ubuntu 24.04 (probe/pty-probe.mjs).
 
 libghostty-vt-node: its prebuilt loads with install scripts blocked (npm warns
 `install-scripts ... @coder/libghostty-vt-node`; nothing needs approving). Pinned exactly (beta).

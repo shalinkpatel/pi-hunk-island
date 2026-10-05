@@ -43,7 +43,8 @@
     "node": ">=20.19"
   },
   "os": [
-    "darwin"
+    "darwin",
+    "linux"
   ],
   "pi": {
     "extensions": [

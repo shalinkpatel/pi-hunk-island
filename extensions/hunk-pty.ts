@@ -40,9 +40,20 @@ const NOTES_EXTENSION = fileURLToPath(new URL("../hunk-ext/pi-notes.mjs", import
 
 // script requires a real pipe, not node's socketpair. EOF must kill script (which ignores it)
 // so hunk gets SIGHUP even if pi is SIGKILLed. $$ becomes script after exec. DESIGN.md j.1.
-// ponytail: macOS-only; Linux needs util-linux script + stty -F. The EOF kill has a PID-reuse window.
-const WRAPPER = 'exec script -q /dev/null /bin/sh -c "$0" sh "$@" < <(cat; kill $$ 2>/dev/null)';
-const INNER = 'stty cols "$1" rows "$2" && tty > "$3" && shift 3 && exec "$@"';
+// script requires a real pipe, not node's socketpair. EOF must kill script (which ignores it)
+// so hunk gets SIGHUP even if pi is SIGKILLed. $$ becomes script after exec. DESIGN.md j.1.
+// ponytail: the EOF kill has a PID-reuse window.
+// macOS script runs a command with its argv; util-linux script only takes -c with one command
+// string, so Linux builds the inner script with hunk's argv shell-quoted in place.
+const DARWIN = process.platform === "darwin";
+const WRAPPER_MAC = 'exec script -q /dev/null /bin/sh -c "$0" sh "$@" < <(cat; kill $$ 2>/dev/null)';
+const INNER_MAC = 'stty cols "$1" rows "$2" && tty > "$3" && shift 3 && exec "$@"';
+// stty addresses the pty device by path: -f on macOS, -F on Linux (util-linux).
+const STTY_DEVICE = [DARWIN ? "-f" : "-F"];
+
+function shq(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
 
 export type HunkSessionOptions = {
   cwd: string;
@@ -85,6 +96,8 @@ function sgr(c: SnapshotCell, inverse: boolean): string {
 export class HunkSession {
   readonly dir: string;
   private readonly notesFile: string;
+  /** Linux only: hunk exit code written by the inner script; null on macOS. */
+  private readonly exitFile: string | null;
   private readonly child: ChildProcess;
   private term: GhosttyVtTerminal | null = null;
   private cols: number;
@@ -97,6 +110,7 @@ export class HunkSession {
     this.rows = Math.max(1, opts.rows);
     this.dir = mkdtempSync(join(tmpdir(), "pi-hunk-"));
     this.notesFile = join(this.dir, "notes.json");
+    this.exitFile = DARWIN ? null : join(this.dir, "exit");
     try {
       writeFileSync(this.notesFile, "[]");
       const extraArgs: string[] = [];
@@ -117,8 +131,15 @@ export class HunkSession {
         ? [patchFile!]
         : [...(opts.targets ?? []), ...(opts.paths ? ["--", opts.paths] : [])];
       this.term = createTerminal({ cols: this.cols, rows: this.rows, scrollbackLimit: 0 });
-      this.child = spawn("/bin/bash", ["-c", WRAPPER, INNER, String(this.cols), String(this.rows),
-        join(this.dir, "tty"), "hunk", sub, "--extension", NOTES_EXTENSION, ...extraArgs, ...targets], {
+      const hunkArgv = ["hunk", sub, "--extension", NOTES_EXTENSION, ...extraArgs, ...targets];
+      const ttyFile = join(this.dir, "tty");
+      // util-linux script lingers until stdin EOF after the child exits (BSD script exits with
+      // the child), so the Linux inner runs hunk without exec, writes its exit code to a file,
+      // then SIGTERMs script; exitCodeOf() reads the file so the host sees hunk's real code.
+      const innerLinux = `stty cols ${this.cols} rows ${this.rows} && tty > ${shq(ttyFile)} && ${hunkArgv.map(shq).join(" ")}; echo $? > ${shq(this.exitFile!)}; kill -TERM $PPID 2>/dev/null`;
+      this.child = spawn("/bin/bash", DARWIN
+        ? ["-c", WRAPPER_MAC, INNER_MAC, String(this.cols), String(this.rows), ttyFile, ...hunkArgv]
+        : ["-c", `exec script -qfec ${shq(innerLinux)} /dev/null < <(cat; kill $$ 2>/dev/null)`], {
         cwd: opts.cwd,
         env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", PI_HUNK_NOTES_FILE: this.notesFile },
         stdio: ["pipe", "pipe", "pipe"],
@@ -152,7 +173,7 @@ export class HunkSession {
     const report = (code: number | null): void => {
       if (reported || !this.term) return;
       reported = true;
-      opts.onExit(code);
+      opts.onExit(this.exitCodeOf(code));
     };
     this.child.on("exit", (code) => {
       this.exited = true;
@@ -171,6 +192,17 @@ export class HunkSession {
     });
   }
 
+  /** script's death signal hides hunk's exit code (Linux); the inner wrote it to the exit file. */
+  private exitCodeOf(code: number | null): number | null {
+    if (this.exitFile === null) return code;
+    try {
+      const read = parseInt(readFileSync(this.exitFile, "utf8").trim(), 10);
+      return Number.isInteger(read) ? read : code;
+    } catch {
+      return code; // no file (host killed script) keeps the raw code
+    }
+  }
+
   /** Raw bytes from pi, untouched. */
   write(data: string): void {
     if (this.term && !this.exited) this.child.stdin?.write(data);
@@ -186,7 +218,7 @@ export class HunkSession {
       const tty = readFileSync(join(this.dir, "tty"), "utf8").trim();
       this.term.resize(cols, rows);
       // Bounded synchronous stty avoids queued resizes landing out of order or after disposal.
-      execFileSync("stty", ["-f", tty, "cols", String(cols), "rows", String(rows)], { timeout: 1000, stdio: "ignore" });
+      execFileSync("stty", [...STTY_DEVICE, tty, "cols", String(cols), "rows", String(rows)], { timeout: 1000, stdio: "ignore" });
     } catch {
       this.term.resize(this.cols, this.rows);
       return false;

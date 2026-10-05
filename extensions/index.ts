@@ -144,7 +144,9 @@ class HunkReviewOverlay implements Component {
 }
 
 function unsupported(): string | null {
-  return process.platform === "darwin" ? null : "hunk review overlay needs macOS (script(1) pty, DESIGN.md j.1).";
+    return process.platform === "darwin" || process.platform === "linux"
+    ? null
+    : "hunk review overlay needs macOS or Linux (script(1) pty, DESIGN.md j.1).";
 }
 
 /** One review, from open through collection. */

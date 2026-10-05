@@ -119,7 +119,7 @@ await a.until(() => a.session.notes().length === 3);
 a.session.write("D"); // hunk: delete active note
 check("legacy: D deletes the note from the mirror", await a.until(() => a.session.notes().length === 2 && !a.session.notes().some((n) => n.text === "doomed")));
 
-// 5. Resize mid-session: stty -f on the pty -> SIGWINCH -> hunk redraws at the new size.
+// 5. Resize mid-session: stty on the pty -> SIGWINCH -> hunk redraws at the new size.
 check("resize accepted", a.session.resize(80, 20));
 check("hunk redrew at 80 cols", await a.until(() => a.session.text().some((l) => /^ ─{78}\s*$/.test(l))));
 check("lines(): 20 rows x 80 cells after resize", a.session.lines().length === 20 && a.session.lines().every((l) => [...strip(l)].length === 80));

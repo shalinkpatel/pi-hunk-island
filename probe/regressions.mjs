@@ -7,6 +7,8 @@ import { HunkSession } from "../extensions/hunk-pty.ts";
 import notesExtension from "../hunk-ext/pi-notes.mjs";
 
 export async function regressions({ open, check, until }) {
+  // stty addresses the pty device by path: -f on macOS, -F on Linux (util-linux).
+  const sttyDevice = process.platform === "darwin" ? "-f" : "-F";
   const s = open();
   check("fault probe reached hunk UI", await until(() => s.has(/Patch review/)));
   s.session.child.stdout.pause(); // inject deterministic chunks, without a concurrent hunk redraw
@@ -68,7 +70,7 @@ export async function regressions({ open, check, until }) {
   check("failed stty remains retryable", !s.session.resize(80, 20) && !s.session.resize(80, 20));
   writeFileSync(ttyFile, tty);
   check("restored tty resizes; successive resizes leave newest size", s.session.resize(80, 20) && s.session.resize(70, 18) && s.session.resize(90, 22) &&
-    execFileSync("stty", ["-f", tty.trim(), "size"], { encoding: "utf8" }).trim() === "22 90");
+    execFileSync("stty", [sttyDevice, tty.trim(), "size"], { encoding: "utf8" }).trim() === "22 90");
 
   const notesFile = s.session.dir + "/notes.json";
   check("zero notes is an empty array", s.session.notes().length === 0);
